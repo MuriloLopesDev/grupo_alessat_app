@@ -1,0 +1,14 @@
+===NOTA SOBRE A ATUALIZAÇÃO===
+
+- Re-design na tela de seleção de mosaicos, agora sendo possível adicionar por frotas
+- Mais uma melhora no carregamento dos videos, tornando mais fluído.
+- Melhora na otimização de exclusão de mosaicos
+- Re-design de lista de mosaicos na tela home
+- Agora é possível selecionar canais separados por veículos
+- Possibilidade de visualizar veículos e canais na lista de mosaicos ao clicar na frota específica
+- Agora é possível selecionar todos os canais ao clicar em todos ao criar uma frota
+
+===OBSERVAÇÕES SOBRE A PRÓXIMA ATUALIZAÇÃO===
+
+- Melhora no grid de câmeras.
+- Visualização de canais reais disponiveis em placas ao invés de fixos.
