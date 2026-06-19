@@ -112,7 +112,7 @@ class _AddFrotaDialogState extends State<AddFrotaDialog> {
         backgroundColor: const Color(0xFF1e262d),
         content: SizedBox(
           width: 500,
-          height: 500,
+          height: MediaQuery.of(context).size.height * 0.6,
           child: Column(
             children: [
               TextField(

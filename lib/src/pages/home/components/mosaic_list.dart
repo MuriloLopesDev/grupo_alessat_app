@@ -49,13 +49,18 @@ class _MosaicListState extends State<MosaicList> {
                         mainAxisSize: MainAxisSize.min,
                         children: [
                           IconButton(
-                            icon: const Icon(Icons.edit, color: Colors.blueAccent), // Botão de edição
-                            onPressed: () => widget.onEdit(mosaic), // Chama o callback de edição
+                            padding: const EdgeInsets.symmetric(horizontal: 4.0),
+                            constraints: const BoxConstraints(),
+                            icon: const Icon(Icons.edit, color: Colors.blueAccent, size: 20),
+                            onPressed: () => widget.onEdit(mosaic),
                           ),
                           IconButton(
+                            padding: const EdgeInsets.symmetric(horizontal: 4.0),
+                            constraints: const BoxConstraints(),
                             icon: Icon(
                               isExpanded ? Icons.expand_less : Icons.expand_more,
                               color: Colors.white,
+                              size: 20,
                             ),
                             onPressed: () {
                               setState(() {
@@ -65,7 +70,9 @@ class _MosaicListState extends State<MosaicList> {
                             },
                           ),
                           IconButton(
-                            icon: const Icon(Icons.delete, color: Colors.redAccent),
+                            padding: const EdgeInsets.symmetric(horizontal: 4.0),
+                            constraints: const BoxConstraints(),
+                            icon: const Icon(Icons.delete, color: Colors.redAccent, size: 20),
                             onPressed: () => widget.onDelete(index),
                           ),
                         ],

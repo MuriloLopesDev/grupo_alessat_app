@@ -168,8 +168,8 @@ class _AddMosaicoDialogState extends ConsumerState<AddMosaicoDialog> {
       backgroundColor: const Color(0xFF1e262d),
       content: SizedBox(
         width: 600,
+        height: MediaQuery.of(context).size.height * 0.6,
         child: Column(
-          mainAxisSize: MainAxisSize.min,
           children: [
             TextField(
               controller: mosaicNameController,

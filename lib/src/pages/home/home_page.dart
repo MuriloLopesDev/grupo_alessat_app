@@ -1,5 +1,5 @@
-// home_page.dart
 import 'dart:math';
+import 'dart:async';
 
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -39,6 +39,8 @@ class _HomePageState extends ConsumerState<HomePage> with WindowListener {
   // Novo mapa para gerenciar o status de cada URL de vídeo individualmente
   final Map<String, VideoStreamStatus> videoStatuses = {};
   final Map<String, String> videoErrors = {};
+  final Map<String, Timer> _reconnectTimers = {};
+  final Map<String, int> _retryCounts = {};
 
   // Mapa para armazenar metadados (placa e canal) por URL de vídeo
   final Map<String, Map<String, dynamic>> _videoMetadata = {};
@@ -78,6 +80,10 @@ class _HomePageState extends ConsumerState<HomePage> with WindowListener {
   @override
   void dispose() {
     windowManager.removeListener(this);
+    for (var timer in _reconnectTimers.values) {
+      timer.cancel();
+    }
+    _reconnectTimers.clear();
     for (var player in players.values) {
       player.dispose();
     }
@@ -175,6 +181,9 @@ class _HomePageState extends ConsumerState<HomePage> with WindowListener {
     }
 
     for (var url in urlsToDispose) {
+      _reconnectTimers[url]?.cancel();
+      _reconnectTimers.remove(url);
+      _retryCounts.remove(url);
       if (players.containsKey(url)) {
         futures.add(Future.sync(() async {
           players[url]?.dispose();
@@ -219,6 +228,9 @@ class _HomePageState extends ConsumerState<HomePage> with WindowListener {
 
     final List<String> urlsToRemove = players.keys.where((url) => !newUrls.contains(url)).toList();
     for (var url in urlsToRemove) {
+      _reconnectTimers[url]?.cancel();
+      _reconnectTimers.remove(url);
+      _retryCounts.remove(url);
       players[url]?.dispose();
       players.remove(url);
       controllers.remove(url);
@@ -245,6 +257,9 @@ class _HomePageState extends ConsumerState<HomePage> with WindowListener {
           videoStatuses[urlBaseVideo] = VideoStreamStatus.loading;
           videoErrors.remove(urlBaseVideo);
         });
+        _reconnectTimers[urlBaseVideo]?.cancel();
+        _reconnectTimers.remove(urlBaseVideo);
+        _retryCounts[urlBaseVideo] = 0;
         loadTasks.add(_loadSingleVideo(urlBaseVideo, deviceSerial, canal, item['veiculo'], apiService, token));
       } else {
         if (videoStatuses[urlBaseVideo] != VideoStreamStatus.loaded) {
@@ -268,12 +283,6 @@ class _HomePageState extends ConsumerState<HomePage> with WindowListener {
       print('Erro ao gerenciar streams de vídeo: $e');
     } finally {
       setState(() {
-        videoStatuses.updateAll((key, value) {
-          if (value == VideoStreamStatus.loading && !players.containsKey(key)) {
-            return VideoStreamStatus.error;
-          }
-          return value;
-        });
         isLoadingGlobal = false;
       });
     }
@@ -282,6 +291,9 @@ class _HomePageState extends ConsumerState<HomePage> with WindowListener {
   // NOVO: Método para remover um vídeo da grid E atualizar a seleção direta
   void _removeVideoFromGrid(String videoUrl) {
     setState(() {
+      _reconnectTimers[videoUrl]?.cancel();
+      _reconnectTimers.remove(videoUrl);
+      _retryCounts.remove(videoUrl);
       // 1. Descartar player e remover da grid
       _currentVideoOrder.remove(videoUrl);
       if (players.containsKey(videoUrl)) {
@@ -311,6 +323,67 @@ class _HomePageState extends ConsumerState<HomePage> with WindowListener {
     });
   }
 
+  void _handleLoadError({
+    required String urlBaseVideo,
+    required String deviceSerial,
+    required dynamic canal,
+    required dynamic veiculo,
+    required ApiService apiService,
+    required String token,
+    required String errorMsg,
+    bool isThumbnailRetry = false,
+    bool disposePlayer = false,
+  }) {
+    if (!mounted || !_currentVideoOrder.contains(urlBaseVideo)) {
+      return;
+    }
+
+    final currentRetries = _retryCounts[urlBaseVideo] ?? 0;
+    if (currentRetries >= 5) {
+      setState(() {
+        if (disposePlayer) {
+          if (players.containsKey(urlBaseVideo)) {
+            players[urlBaseVideo]?.dispose();
+            players.remove(urlBaseVideo);
+            controllers.remove(urlBaseVideo);
+          }
+        }
+        videoStatuses[urlBaseVideo] = VideoStreamStatus.error;
+        videoErrors[urlBaseVideo] = errorMsg;
+      });
+      return;
+    }
+
+    _retryCounts[urlBaseVideo] = currentRetries + 1;
+
+    setState(() {
+      if (disposePlayer) {
+        if (players.containsKey(urlBaseVideo)) {
+          players[urlBaseVideo]?.dispose();
+          players.remove(urlBaseVideo);
+          controllers.remove(urlBaseVideo);
+        }
+      }
+      videoStatuses[urlBaseVideo] = VideoStreamStatus.loading;
+    });
+
+    _reconnectTimers[urlBaseVideo]?.cancel();
+    _reconnectTimers[urlBaseVideo] = Timer(
+      Duration(seconds: isThumbnailRetry ? 2 : 3),
+      () {
+        if (!mounted || !_currentVideoOrder.contains(urlBaseVideo)) return;
+        _loadSingleVideo(
+          urlBaseVideo,
+          deviceSerial,
+          canal,
+          veiculo,
+          apiService,
+          token,
+        );
+      },
+    );
+  }
+
   Future<void> _loadSingleVideo(
     String urlBaseVideo,
     String deviceSerial,
@@ -320,48 +393,59 @@ class _HomePageState extends ConsumerState<HomePage> with WindowListener {
     String token,
   ) async {
     try {
-      final urlData = await apiService.liveMedia(deviceSerial, token, canal);
-if (urlData != null && urlData.isNotEmpty) {
-  final address = urlData['address']?.toString();
-  final isThumbnail = urlData['isThumbnail'] == true;
+      final urlData = await apiService.liveMedia(deviceSerial, token, canal).timeout(const Duration(seconds: 15));
+      if (!mounted || !_currentVideoOrder.contains(urlBaseVideo)) {
+        return;
+      }
+      if (urlData != null && urlData.isNotEmpty) {
+        final address = urlData['address']?.toString();
+        final isThumbnail = urlData['isThumbnail'] == true;
 
-  print('liveMedia data [$deviceSerial canal $canal]: $urlData');
+        print('liveMedia data [$deviceSerial canal $canal]: $urlData');
 
-  if (address == null || address.isEmpty) {
-    setState(() {
-      videoStatuses[urlBaseVideo] = VideoStreamStatus.error;
-      videoErrors[urlBaseVideo] = 'API não retornou endereço de mídia para $deviceSerial canal $canal';
-    });
-    return;
-  }
+        if (address == null || address.isEmpty) {
+          _handleLoadError(
+            urlBaseVideo: urlBaseVideo,
+            deviceSerial: deviceSerial,
+            canal: canal,
+            veiculo: veiculo,
+            apiService: apiService,
+            token: token,
+            errorMsg: 'API não retornou endereço de mídia para $deviceSerial canal $canal',
+          );
+          return;
+        }
 
-  if (isThumbnail || address.toLowerCase().endsWith('.jpg') || address.toLowerCase().endsWith('.jpeg') || address.toLowerCase().endsWith('.png')) {
-    print('Stream ainda não pronto para $deviceSerial canal $canal. Retornou thumbnail: $address');
+        if (isThumbnail || address.toLowerCase().endsWith('.jpg') || address.toLowerCase().endsWith('.jpeg') || address.toLowerCase().endsWith('.png')) {
+          print('Stream ainda não pronto para $deviceSerial canal $canal. Retornou thumbnail: $address');
 
-    Future.delayed(const Duration(seconds: 2), () {
-      if (!mounted) return;
+          _handleLoadError(
+            urlBaseVideo: urlBaseVideo,
+            deviceSerial: deviceSerial,
+            canal: canal,
+            veiculo: veiculo,
+            apiService: apiService,
+            token: token,
+            errorMsg: 'Câmera offline (limite de tentativas excedido)',
+            isThumbnailRetry: true,
+          );
+          return;
+        }
 
-      _loadSingleVideo(
-        urlBaseVideo,
-        deviceSerial,
-        canal,
-        veiculo,
-        apiService,
-        token,
-      );
-    });
+        final actualStreamUrl = address.startsWith('http')
+            ? address
+            : '${apiService.baseUrlMedia}$address';
 
-    return;
-  }
+        print('URL FINAL DO STREAM [$deviceSerial canal $canal]: $actualStreamUrl');
 
-  final actualStreamUrl = address.startsWith('http')
-      ? address
-      : '${apiService.baseUrlMedia}$address';
-
-  print('URL FINAL DO STREAM [$deviceSerial canal $canal]: $actualStreamUrl');
+        if (!mounted || !_currentVideoOrder.contains(urlBaseVideo)) {
+          return;
+        }
 
         if (players.containsKey(urlBaseVideo)) {
           players[urlBaseVideo]?.dispose();
+          players.remove(urlBaseVideo);
+          controllers.remove(urlBaseVideo);
         }
 
         final player = Player(
@@ -371,51 +455,70 @@ if (urlData != null && urlData.isNotEmpty) {
         ));
         final controller = VideoController(player);
 
-final headers = {
-  'Authorization': 'Bearer $token',
-  'Cache-Control': 'max-age=0, no-cache',
-  'Pragma': 'no-cache',
-  'Accept': 'application/vnd.apple.mpegurl, application/x-mpegURL, */*',
-  'User-Agent': 'grupo_alessat_app/1.0',
-};
+        final headers = {
+          'Authorization': 'Bearer $token',
+          'Cache-Control': 'max-age=0, no-cache',
+          'Pragma': 'no-cache',
+          'Accept': 'application/vnd.apple.mpegurl, application/x-mpegURL, */*',
+          'User-Agent': 'grupo_alessat_app/1.0',
+        };
 
-final media = Media(
-  actualStreamUrl,
-  httpHeaders: headers,
-);
+        final media = Media(
+          actualStreamUrl,
+          httpHeaders: headers,
+        );
 
-void reconnect() {
-  Future.delayed(Duration(seconds: 2 + Random().nextInt(4)), () {
-    try {
-      player.open(media, play: true);
-    } catch (e) {
-      print('Não foi possível reconectar $actualStreamUrl, player provavelmente já foi descartado. Erro: $e');
-    }
-  });
-}
+        void reconnect() {
+          _reconnectTimers[urlBaseVideo]?.cancel();
+          _reconnectTimers[urlBaseVideo] = Timer(Duration(seconds: 2 + Random().nextInt(4)), () {
+            if (!mounted || !players.containsKey(urlBaseVideo) || !_currentVideoOrder.contains(urlBaseVideo)) return;
+            try {
+              if (mounted) {
+                setState(() {
+                  videoStatuses[urlBaseVideo] = VideoStreamStatus.loading;
+                });
+              }
+              player.open(media, play: true);
+            } catch (e) {
+              print('Não foi possível reconectar $actualStreamUrl, player provavelmente já foi descartado. Erro: $e');
+            }
+          });
+        }
 
-player.stream.completed.listen((isCompleted) {
-  if (isCompleted) {
-    print('Player para $actualStreamUrl foi completado. Tentando reconectar...');
-    reconnect();
-  }
-});
+        player.stream.completed.listen((isCompleted) {
+          if (isCompleted) {
+            print('Player para $actualStreamUrl foi completado. Tentando reconectar...');
+            reconnect();
+          }
+        });
 
-player.stream.error.listen((error) {
-  print('Player para $actualStreamUrl encontrou um erro: "$error".');
+        player.stream.error.listen((error) {
+          print('Player para $actualStreamUrl encontrou um erro: "$error".');
+          _handleLoadError(
+            urlBaseVideo: urlBaseVideo,
+            deviceSerial: deviceSerial,
+            canal: canal,
+            veiculo: veiculo,
+            apiService: apiService,
+            token: token,
+            errorMsg: 'Erro ao abrir stream: $error',
+            disposePlayer: true,
+          );
+        });
 
-  setState(() {
-    videoStatuses[urlBaseVideo] = VideoStreamStatus.error;
-    videoErrors[urlBaseVideo] = 'Erro ao abrir stream: $error';
-  });
+        player.stream.playing.listen((isPlaying) {
+          if (isPlaying) {
+            _retryCounts[urlBaseVideo] = 0;
+          }
+        });
 
-  // Durante o diagnóstico, não reconecta automaticamente.
-  // Se reconectar aqui, o erro fica em loop e esconde a causa real.
-  // reconnect();
-});
+        await player.open(media, play: true);
+        await player.setVolume(0);
 
-await player.open(media, play: true);
-await player.setVolume(0);
+        if (!mounted || !_currentVideoOrder.contains(urlBaseVideo)) {
+          player.dispose();
+          return;
+        }
 
         setState(() {
           players[urlBaseVideo] = player;
@@ -424,16 +527,26 @@ await player.setVolume(0);
           videoErrors.remove(urlBaseVideo);
         });
       } else {
-        setState(() {
-          videoStatuses[urlBaseVideo] = VideoStreamStatus.error;
-          videoErrors[urlBaseVideo] = 'Erro ao carregar canal $canal da placa: ${veiculo['plate'] ?? deviceSerial}';
-        });
+        _handleLoadError(
+          urlBaseVideo: urlBaseVideo,
+          deviceSerial: deviceSerial,
+          canal: canal,
+          veiculo: veiculo,
+          apiService: apiService,
+          token: token,
+          errorMsg: 'Erro ao carregar canal $canal da placa: ${veiculo['plate'] ?? deviceSerial}',
+        );
       }
     } catch (e) {
-      setState(() {
-        videoStatuses[urlBaseVideo] = VideoStreamStatus.error;
-        videoErrors[urlBaseVideo] = 'Erro ao obter mídia do dispositivo: $deviceSerial (canal: $canal). Erro: $e';
-      });
+      _handleLoadError(
+        urlBaseVideo: urlBaseVideo,
+        deviceSerial: deviceSerial,
+        canal: canal,
+        veiculo: veiculo,
+        apiService: apiService,
+        token: token,
+        errorMsg: 'Erro ao obter mídia do dispositivo: $deviceSerial (canal: $canal). Erro: $e',
+      );
     }
   }
 
@@ -509,9 +622,6 @@ await player.setVolume(0);
 
   @override
   Widget build(BuildContext context) {
-    final screenWidth = MediaQuery.of(context).size.width;
-    final bool isSmallScreen = screenWidth < 900;
-
     final mosaics = ref.watch(mosaicsProvider);
     final vehicles = ref.watch(vehiclesProvider);
 
@@ -529,8 +639,10 @@ await player.setVolume(0);
                     children: [
                       Padding(
                         padding: const EdgeInsets.all(16.0),
-                        child: Row(
-                          mainAxisAlignment: MainAxisAlignment.spaceAround,
+                        child: Wrap(
+                          spacing: 8.0,
+                          runSpacing: 8.0,
+                          alignment: WrapAlignment.center,
                           children: [
                             ElevatedButton(
                               onPressed: () => _switchToListMode(true),
@@ -665,7 +777,27 @@ await player.setVolume(0);
                         videoStatuses: videoStatuses,
                         videoErrors: videoErrors,
                         videoMetadata: _videoMetadata,
-                        onRemove: _removeVideoFromGrid, // Passa o callback de remoção
+                        onRemove: _removeVideoFromGrid,
+                        onRetry: (url) {
+                          final metadata = _videoMetadata[url];
+                          if (metadata != null) {
+                            final deviceSerial = metadata['deviceSerial'];
+                            final canal = metadata['channel'];
+                            final apiService = ref.read(apiServiceProvider);
+                            final token = widget.token;
+                            final vehicle = {
+                              'deviceSerial': deviceSerial,
+                              'plate': metadata['plate'],
+                              'status': 'connected',
+                            };
+                            setState(() {
+                              videoStatuses[url] = VideoStreamStatus.loading;
+                              videoErrors.remove(url);
+                              _retryCounts[url] = 0;
+                            });
+                            _loadSingleVideo(url, deviceSerial, canal, vehicle, apiService, token);
+                          }
+                        },
                       ),
               ),
             ],
