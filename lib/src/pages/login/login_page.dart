@@ -16,6 +16,7 @@ class _LoginPageState extends State<LoginPage> {
   final _passwordController = TextEditingController();
   final _formKey = GlobalKey<FormState>();
   bool _passwordVisible = false; // Estado para controlar a visibilidade da senha
+  bool _isLoading = false; // Estado para controlar o carregamento do login
   final ApiService _apiService = ApiService();
 
   @override
@@ -45,23 +46,60 @@ class _LoginPageState extends State<LoginPage> {
 
   void _login() async {
     if (_formKey.currentState!.validate()) {
-      final request = LoginRequest(
-        username: _usernameController.text.trim(),
-        password: _passwordController.text.trim(),
-      );
+      setState(() {
+        _isLoading = true;
+      });
 
-      final response = await _apiService.login(request);
+      try {
+        final request = LoginRequest(
+          username: _usernameController.text.trim(),
+          password: _passwordController.text.trim(),
+        );
 
-      if (response.token.isNotEmpty) {
-        await _resetWindowBehavior();
-        Navigator.pushReplacement(
-          context,
-          MaterialPageRoute(builder: (context) => HomePage(token: response.token)),
-        );
-      } else {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text(response.message)),
-        );
+        final response = await _apiService.login(request);
+
+        if (!mounted) return;
+
+        if (response.token.isNotEmpty) {
+          await _resetWindowBehavior();
+          if (!mounted) return;
+          Navigator.pushReplacement(
+            context,
+            MaterialPageRoute(builder: (context) => HomePage(token: response.token)),
+          );
+        } else {
+          final lowerMsg = response.message.toLowerCase();
+          final friendlyMessage = (lowerMsg.contains('invalido') || 
+                                   lowerMsg.contains('inválido') || 
+                                   lowerMsg.contains('credential') || 
+                                   lowerMsg.contains('incorrect') || 
+                                   lowerMsg.contains('senha') || 
+                                   lowerMsg.contains('usuário'))
+              ? 'Usuário, chave de acesso ou senha inválidos.'
+              : response.message;
+
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              content: Text(friendlyMessage),
+              backgroundColor: Colors.redAccent,
+            ),
+          );
+        }
+      } catch (e) {
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(
+              content: Text('Erro ao tentar conectar ao servidor. Verifique sua conexão.'),
+              backgroundColor: Colors.redAccent,
+            ),
+          );
+        }
+      } finally {
+        if (mounted) {
+          setState(() {
+            _isLoading = false;
+          });
+        }
       }
     }
   }
@@ -153,138 +191,168 @@ class _LoginPageState extends State<LoginPage> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      body: Container(
-        color: const Color(0xFF1e262d),
-        child: Center(
-          child: Padding(
-            padding: const EdgeInsets.all(16.0),
-            child: Form(
-              key: _formKey,
-              child: Column(
-                mainAxisSize: MainAxisSize.min,
-                crossAxisAlignment: CrossAxisAlignment.center,
-                children: [
-                  Image.asset('assets/logo-login-alessat-dark.png'),
-                  const SizedBox(height: 20),
-                  Container(
-                    width: MediaQuery.of(context).size.width * 0.6,
-                    child: TextFormField(
-                      controller: _usernameController,
-                      decoration: const InputDecoration(
-                        labelText: 'Nome de usuário ou chave de acesso',
-                        labelStyle: TextStyle(color: Colors.white),
-                        border: OutlineInputBorder(),
-                        enabledBorder: OutlineInputBorder(
-                          borderSide: BorderSide(color: Colors.grey),
-                        ),
-                        focusedBorder: OutlineInputBorder(
-                          borderSide: BorderSide(color: Colors.blue),
+      backgroundColor: const Color(0xFF1e262d),
+      body: Center(
+        child: SingleChildScrollView(
+          padding: const EdgeInsets.all(16.0),
+          child: ConstrainedBox(
+            constraints: const BoxConstraints(
+              maxWidth: 450.0,
+            ),
+            child: Card(
+              color: const Color(0xFF2a333a),
+              elevation: 4.0,
+              shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(12.0),
+                side: BorderSide(
+                  color: Colors.white.withOpacity(0.06),
+                  width: 1.0,
+                ),
+              ),
+              child: Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 32.0, vertical: 40.0),
+                child: Form(
+                  key: _formKey,
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    crossAxisAlignment: CrossAxisAlignment.stretch,
+                    children: [
+                      Image.asset(
+                        'assets/logo-login-alessat-dark.png',
+                        height: 100.0,
+                        fit: BoxFit.contain,
+                      ),
+                      const SizedBox(height: 24.0),
+                      const Text(
+                        'Acesse sua conta',
+                        textAlign: TextAlign.center,
+                        style: TextStyle(
+                          color: Colors.white,
+                          fontSize: 22.0,
+                          fontWeight: FontWeight.bold,
                         ),
                       ),
-                      style: const TextStyle(color: Colors.white),
-                      validator: (value) {
-                        if (value!.isEmpty) {
-                          return 'Campo obrigatório';
-                        }
-                        return null;
-                      },
-                    ),
-                  ),
-                  const SizedBox(height: 20),
-                  Container(
-                    width: MediaQuery.of(context).size.width * 0.6,
-                    child: TextFormField(
-                      controller: _passwordController,
-                      decoration: InputDecoration(
-                        labelText: 'Senha',
-                        labelStyle: const TextStyle(color: Colors.white),
-                        border: const OutlineInputBorder(),
-                        enabledBorder: const OutlineInputBorder(
-                          borderSide: BorderSide(color: Colors.grey),
+                      const SizedBox(height: 8.0),
+                      Text(
+                        'Entre para visualizar seus mosaicos e câmeras.',
+                        textAlign: TextAlign.center,
+                        style: TextStyle(
+                          color: Colors.white.withOpacity(0.7),
+                          fontSize: 14.0,
                         ),
-                        focusedBorder: const OutlineInputBorder(
-                          borderSide: BorderSide(color: Colors.blue),
-                        ),
-                        suffixIcon: IconButton(
-                          icon: Icon(
-                            _passwordVisible ? Icons.visibility : Icons.visibility_off,
-                            color: Colors.grey,
+                      ),
+                      const SizedBox(height: 32.0),
+                      TextFormField(
+                        controller: _usernameController,
+                        decoration: InputDecoration(
+                          labelText: 'Usuário ou chave de acesso',
+                          labelStyle: const TextStyle(color: Colors.white70),
+                          border: OutlineInputBorder(
+                            borderRadius: BorderRadius.circular(8.0),
                           ),
-                          onPressed: () {
-                            setState(() {
-                              _passwordVisible = !_passwordVisible;
-                            });
-                          },
+                          enabledBorder: OutlineInputBorder(
+                            borderRadius: BorderRadius.circular(8.0),
+                            borderSide: const BorderSide(color: Colors.grey),
+                          ),
+                          focusedBorder: OutlineInputBorder(
+                            borderRadius: BorderRadius.circular(8.0),
+                            borderSide: const BorderSide(color: Color(0xFF0794bc), width: 1.5),
+                          ),
+                          contentPadding: const EdgeInsets.symmetric(horizontal: 16.0, vertical: 16.0),
+                        ),
+                        style: const TextStyle(color: Colors.white),
+                        validator: (value) {
+                          if (value == null || value.trim().isEmpty) {
+                            return 'Campo obrigatório';
+                          }
+                          return null;
+                        },
+                      ),
+                      const SizedBox(height: 20.0),
+                      TextFormField(
+                        controller: _passwordController,
+                        decoration: InputDecoration(
+                          labelText: 'Senha',
+                          labelStyle: const TextStyle(color: Colors.white70),
+                          border: OutlineInputBorder(
+                            borderRadius: BorderRadius.circular(8.0),
+                          ),
+                          enabledBorder: OutlineInputBorder(
+                            borderRadius: BorderRadius.circular(8.0),
+                            borderSide: const BorderSide(color: Colors.grey),
+                          ),
+                          focusedBorder: OutlineInputBorder(
+                            borderRadius: BorderRadius.circular(8.0),
+                            borderSide: const BorderSide(color: Color(0xFF0794bc), width: 1.5),
+                          ),
+                          contentPadding: const EdgeInsets.symmetric(horizontal: 16.0, vertical: 16.0),
+                          suffixIcon: IconButton(
+                            icon: Icon(
+                              _passwordVisible ? Icons.visibility : Icons.visibility_off,
+                              color: Colors.grey,
+                            ),
+                            onPressed: () {
+                              setState(() {
+                                _passwordVisible = !_passwordVisible;
+                              });
+                            },
+                          ),
+                        ),
+                        obscureText: !_passwordVisible,
+                        style: const TextStyle(color: Colors.white),
+                        validator: (value) {
+                          if (value == null || value.trim().isEmpty) {
+                            return 'Campo obrigatório';
+                          }
+                          return null;
+                        },
+                      ),
+                      const SizedBox(height: 32.0),
+                      SizedBox(
+                        height: 48.0,
+                        child: ElevatedButton(
+                          style: ElevatedButton.styleFrom(
+                            backgroundColor: const Color(0xFF0794bc),
+                            foregroundColor: Colors.white,
+                            shape: RoundedRectangleBorder(
+                              borderRadius: BorderRadius.circular(8.0),
+                            ),
+                          ),
+                          onPressed: _isLoading ? null : _login,
+                          child: _isLoading
+                              ? const Row(
+                                  mainAxisAlignment: MainAxisAlignment.center,
+                                  children: [
+                                    SizedBox(
+                                      height: 18.0,
+                                      width: 18.0,
+                                      child: CircularProgressIndicator(
+                                        color: Colors.white,
+                                        strokeWidth: 2.0,
+                                      ),
+                                    ),
+                                    SizedBox(width: 10),
+                                    Text(
+                                      'Entrando...',
+                                      style: TextStyle(
+                                        fontSize: 16.0,
+                                        fontWeight: FontWeight.bold,
+                                      ),
+                                    ),
+                                  ],
+                                )
+                              : const Text(
+                                  'Entrar',
+                                  style: TextStyle(
+                                    fontSize: 16.0,
+                                    fontWeight: FontWeight.bold,
+                                  ),
+                                ),
                         ),
                       ),
-                      obscureText: !_passwordVisible, // Controla a visibilidade da senha
-                      style: const TextStyle(color: Colors.white),
-                      validator: (value) {
-                        if (value!.isEmpty) {
-                          return 'Campo obrigatório';
-                        }
-                        return null;
-                      },
-                    ),
+                    ],
                   ),
-                  // const SizedBox(height: 20),
-                  // Center(
-                  //   child: Row(
-                  //     mainAxisAlignment: MainAxisAlignment.center,
-                  //     children: [
-                  //       Transform.scale(
-                  //         scale: 0.7,
-                  //         child: Switch(
-                  //           value: _rememberPassword,
-                  //           onChanged: (value) {
-                  //             setState(() {
-                  //               _rememberPassword = value;
-                  //             });
-                  //           },
-                  //           activeColor: Colors.blue,
-                  //         ),
-                  //       ),
-                  //       const Text(
-                  //         'Lembrar senha',
-                  //         style: TextStyle(color: Colors.white),
-                  //       ),
-                  //     ],
-                  //   ),
-                  // ),
-                  const SizedBox(height: 20),
-                  SizedBox(
-                    width: 250,
-                    height: 40,
-                    child: ElevatedButton(
-                      style: ElevatedButton.styleFrom(
-                        backgroundColor: const Color(0xFF0794bc),
-                        foregroundColor: Colors.white,
-                        shape: RoundedRectangleBorder(
-                          borderRadius: BorderRadius.circular(5.0),
-                        ),
-                      ),
-                      onPressed: _login,
-                      child: const Text('Confirmar'),
-                    ),
-                  ),
-                  const SizedBox(height: 10),
-                  // SizedBox(
-                  //   width: 250,
-                  //   height: 40,
-                  //   child: ElevatedButton(
-                  //     style: ElevatedButton.styleFrom(
-                  //       backgroundColor: Colors.transparent,
-                  //       foregroundColor: Colors.white,
-                  //       shape: RoundedRectangleBorder(
-                  //         borderRadius: BorderRadius.circular(5.0),
-                  //         side: const BorderSide(color: Colors.white, width: 1.0),
-                  //       ),
-                  //     ),
-                  //     onPressed: _showRecoverPasswordDialog,
-                  //     child: const Text('Recuperar Senha'),
-                  //   ),
-                  // ),
-                ],
+                ),
               ),
             ),
           ),
