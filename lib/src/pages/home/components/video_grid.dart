@@ -138,6 +138,8 @@ class VideoErrorWidget extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final friendlyMessage = _getFriendlyErrorMessage(errorMessage);
+
     return Container(
       color: Colors.black,
       padding: const EdgeInsets.all(8.0),
@@ -157,7 +159,7 @@ class VideoErrorWidget extends StatelessWidget {
                   ),
                   const SizedBox(height: 4),
                   Text(
-                    errorMessage ?? 'Erro de conexão!',
+                    friendlyMessage,
                     textAlign: TextAlign.center,
                     maxLines: isCompact ? 1 : 2,
                     overflow: TextOverflow.ellipsis,
@@ -168,22 +170,25 @@ class VideoErrorWidget extends StatelessWidget {
                     ),
                   ),
                   const SizedBox(height: 6),
-                  ElevatedButton.icon(
-                    onPressed: onRetry,
-                    icon: Icon(Icons.refresh, size: isCompact ? 10 : 14),
-                    label: Text(
-                      'Reconectar',
-                      style: TextStyle(fontSize: isCompact ? 8.0 : 10.0),
-                    ),
-                    style: ElevatedButton.styleFrom(
-                      backgroundColor: const Color(0xFF0794bc),
-                      foregroundColor: Colors.white,
-                      padding: EdgeInsets.symmetric(
-                        horizontal: isCompact ? 6.0 : 10.0,
-                        vertical: isCompact ? 2.0 : 4.0,
+                  Tooltip(
+                    message: 'Reconectar câmera',
+                    child: ElevatedButton.icon(
+                      onPressed: onRetry,
+                      icon: Icon(Icons.refresh, size: isCompact ? 10 : 14),
+                      label: Text(
+                        'Reconectar',
+                        style: TextStyle(fontSize: isCompact ? 8.0 : 10.0),
                       ),
-                      minimumSize: Size.zero,
-                      tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                      style: ElevatedButton.styleFrom(
+                        backgroundColor: const Color(0xFF0794bc),
+                        foregroundColor: Colors.white,
+                        padding: EdgeInsets.symmetric(
+                          horizontal: isCompact ? 6.0 : 10.0,
+                          vertical: isCompact ? 2.0 : 4.0,
+                        ),
+                        minimumSize: Size.zero,
+                        tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                      ),
                     ),
                   ),
                 ],
@@ -442,7 +447,7 @@ class _VideoTileState extends State<VideoTile> {
           final Widget removeWidget = isCompact
               ? removeButton
               : Tooltip(
-                  message: 'Remover câmera',
+                  message: 'Fechar câmera',
                   child: removeButton,
                 );
 
@@ -502,13 +507,16 @@ class _VideoTileState extends State<VideoTile> {
                 right: isCompact ? 4.0 : 8.0,
                 child: fullscreenWidget,
               ),
-              // Botão de "X" para remover (visível apenas no hover, canto superior direito)
-              if (_isHovered)
-                Positioned(
-                  top: isCompact ? 4.0 : 8.0,
-                  right: isCompact ? 4.0 : 8.0,
+              // Botão de "X" para fechar (sempre visível com opacidade reduzida, aumenta no hover)
+              Positioned(
+                top: isCompact ? 4.0 : 8.0,
+                right: isCompact ? 4.0 : 8.0,
+                child: AnimatedOpacity(
+                  opacity: _isHovered ? 1.0 : 0.4,
+                  duration: const Duration(milliseconds: 200),
                   child: removeWidget,
                 ),
+              ),
             ],
           );
         },
@@ -532,4 +540,41 @@ class _VideoTileState extends State<VideoTile> {
       ),
     );
   }
+}
+
+String _getFriendlyErrorMessage(String? rawError) {
+  if (rawError == null) return 'Não foi possível iniciar a transmissão desta câmera.';
+  final lowerError = rawError.toLowerCase();
+  
+  // 1. Limite de tentativas / Offline
+  if (lowerError.contains('limite de tentativas excedido') || 
+      lowerError.contains('tentativas excedid') ||
+      lowerError.contains('offline')) {
+    return 'Câmera offline ou sem resposta no momento.';
+  }
+  
+  // 2. Timeout/Conexão
+  if (lowerError.contains('timeout') || 
+      lowerError.contains('conexão') || 
+      lowerError.contains('socketexception') ||
+      lowerError.contains('network') ||
+      lowerError.contains('unreachable') ||
+      lowerError.contains('refused') ||
+      lowerError.contains('hostlookup') ||
+      lowerError.contains('temporariamente indisponível')) {
+    return 'Câmera temporariamente indisponível. Verifique a conexão do veículo.';
+  }
+  
+  // 3. Erro ao obter mídia / abrir stream
+  if (lowerError.contains('api não retornou') || 
+      lowerError.contains('obter mídia') || 
+      lowerError.contains('abrir stream') ||
+      lowerError.contains('erro ao') ||
+      lowerError.contains('error') ||
+      lowerError.contains('media') ||
+      lowerError.contains('stream')) {
+    return 'Não foi possível iniciar a transmissão desta câmera.';
+  }
+
+  return 'Não foi possível iniciar a transmissão desta câmera.';
 }

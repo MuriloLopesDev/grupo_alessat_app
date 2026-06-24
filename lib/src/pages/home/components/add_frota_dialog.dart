@@ -171,7 +171,7 @@ class _AddFrotaDialogState extends State<AddFrotaDialog> {
                     return ExpansionTile(
                       title: Row(
                         children: [
-                          Icon(Icons.directions_car, color: v['status'] == 'connected' ? Colors.green : Colors.red),
+                          Icon(Icons.local_shipping, color: v['status'] == 'connected' ? Colors.green : Colors.red),
                           const SizedBox(width: 8),
                           Text(v['plate'], style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
                         ],

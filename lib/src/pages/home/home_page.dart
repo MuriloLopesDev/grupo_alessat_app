@@ -323,6 +323,32 @@ class _HomePageState extends ConsumerState<HomePage> with WindowListener {
     });
   }
 
+  void _clearAllVideos() {
+    setState(() {
+      for (var timer in _reconnectTimers.values) {
+        timer.cancel();
+      }
+      _reconnectTimers.clear();
+      _retryCounts.clear();
+
+      for (var player in players.values) {
+        try {
+          player.dispose();
+        } catch (e) {
+          print('Erro ao descartar player durante limpeza: $e');
+        }
+      }
+      players.clear();
+      controllers.clear();
+      videoStatuses.clear();
+      videoErrors.clear();
+      _videoMetadata.clear();
+      _currentVideoOrder.clear();
+      _selectedDirectChannels.clear();
+      isLoadingGlobal = false;
+    });
+  }
+
   void _handleLoadError({
     required String urlBaseVideo,
     required String deviceSerial,
@@ -633,8 +659,8 @@ class _HomePageState extends ConsumerState<HomePage> with WindowListener {
             children: [
               Visibility(
                 visible: _showLists,
-                child: Expanded(
-                  flex: 4,
+                child: SizedBox(
+                  width: (MediaQuery.of(context).size.width * 0.22).clamp(280.0, 340.0),
                   child: Column(
                     children: [
                       Padding(
@@ -762,42 +788,106 @@ class _HomePageState extends ConsumerState<HomePage> with WindowListener {
                 ),
               ),
               Expanded(
-                flex: _showLists ? 16 : 20,
                 child: _currentVideoOrder.isEmpty && !isLoadingGlobal && !videoStatuses.containsValue(VideoStreamStatus.loading)
-                    ? const Center(
-                        child: Text(
-                          'Selecione um mosaico ou veículo para ver as câmeras',
-                          style: TextStyle(color: Colors.white, fontSize: 18.0),
+                    ? Center(
+                        child: SingleChildScrollView(
+                          child: Column(
+                            mainAxisAlignment: MainAxisAlignment.center,
+                            children: [
+                              Icon(
+                                Icons.videocam_off,
+                                color: Colors.white.withOpacity(0.35),
+                                size: 64,
+                              ),
+                              const SizedBox(height: 16),
+                              const Text(
+                                'Nenhuma câmera selecionada',
+                                textAlign: TextAlign.center,
+                                style: TextStyle(
+                                  color: Colors.white,
+                                  fontSize: 18.0,
+                                  fontWeight: FontWeight.bold,
+                                ),
+                              ),
+                              const SizedBox(height: 8),
+                              Text(
+                                'Escolha um veículo na lateral e marque os canais que deseja visualizar.',
+                                textAlign: TextAlign.center,
+                                style: TextStyle(
+                                  color: Colors.white.withOpacity(0.6),
+                                  fontSize: 14.0,
+                                ),
+                              ),
+                            ],
+                          ),
                         ),
                       )
-                    : VideoGrid(
-                        videoUrls: _currentVideoOrder,
-                        controllers: controllers,
-                        onFullScreen: _enterFullScreen,
-                        videoStatuses: videoStatuses,
-                        videoErrors: videoErrors,
-                        videoMetadata: _videoMetadata,
-                        onRemove: _removeVideoFromGrid,
-                        onRetry: (url) {
-                          final metadata = _videoMetadata[url];
-                          if (metadata != null) {
-                            final deviceSerial = metadata['deviceSerial'];
-                            final canal = metadata['channel'];
-                            final apiService = ref.read(apiServiceProvider);
-                            final token = widget.token;
-                            final vehicle = {
-                              'deviceSerial': deviceSerial,
-                              'plate': metadata['plate'],
-                              'status': 'connected',
-                            };
-                            setState(() {
-                              videoStatuses[url] = VideoStreamStatus.loading;
-                              videoErrors.remove(url);
-                              _retryCounts[url] = 0;
-                            });
-                            _loadSingleVideo(url, deviceSerial, canal, vehicle, apiService, token);
-                          }
-                        },
+                    : Column(
+                        crossAxisAlignment: CrossAxisAlignment.stretch,
+                        children: [
+                          Padding(
+                            padding: const EdgeInsets.symmetric(horizontal: 16.0, vertical: 8.0),
+                            child: Row(
+                              mainAxisAlignment: MainAxisAlignment.start,
+                              crossAxisAlignment: CrossAxisAlignment.center,
+                              children: [
+                                Text(
+                                  _currentVideoOrder.length == 1
+                                      ? '1 câmera aberta'
+                                      : '${_currentVideoOrder.length} câmeras abertas',
+                                  style: const TextStyle(
+                                    color: Colors.white70,
+                                    fontSize: 14.0,
+                                    fontWeight: FontWeight.bold,
+                                  ),
+                                ),
+                                const SizedBox(width: 24.0),
+                                TextButton.icon(
+                                  onPressed: _clearAllVideos,
+                                  icon: const Icon(Icons.clear_all, color: Colors.redAccent, size: 18),
+                                  label: const Text(
+                                    'Fechar todas',
+                                    style: TextStyle(color: Colors.redAccent, fontSize: 13.0),
+                                  ),
+                                  style: TextButton.styleFrom(
+                                    padding: const EdgeInsets.symmetric(horizontal: 8.0, vertical: 4.0),
+                                  ),
+                                ),
+                              ],
+                            ),
+                          ),
+                          Expanded(
+                            child: VideoGrid(
+                              videoUrls: _currentVideoOrder,
+                              controllers: controllers,
+                              onFullScreen: _enterFullScreen,
+                              videoStatuses: videoStatuses,
+                              videoErrors: videoErrors,
+                              videoMetadata: _videoMetadata,
+                              onRemove: _removeVideoFromGrid,
+                              onRetry: (url) {
+                                final metadata = _videoMetadata[url];
+                                if (metadata != null) {
+                                  final deviceSerial = metadata['deviceSerial'];
+                                  final canal = metadata['channel'];
+                                  final apiService = ref.read(apiServiceProvider);
+                                  final token = widget.token;
+                                  final vehicle = {
+                                    'deviceSerial': deviceSerial,
+                                    'plate': metadata['plate'],
+                                    'status': 'connected',
+                                  };
+                                  setState(() {
+                                    videoStatuses[url] = VideoStreamStatus.loading;
+                                    videoErrors.remove(url);
+                                    _retryCounts[url] = 0;
+                                  });
+                                  _loadSingleVideo(url, deviceSerial, canal, vehicle, apiService, token);
+                                }
+                              },
+                            ),
+                          ),
+                        ],
                       ),
               ),
             ],

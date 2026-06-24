@@ -88,7 +88,7 @@ class _MosaicListState extends State<MosaicList> {
                           ),
                           collapsedIconColor: Colors.white70,
                           iconColor: Colors.white70,
-                          leading: const Icon(Icons.directions_car, color: Colors.white54),
+                          leading: const Icon(Icons.local_shipping, color: Colors.white54),
                           trailing: IconButton(
                             icon: const Icon(Icons.play_arrow, color: Colors.greenAccent),
                             onPressed: () => widget.onLoad(frota),

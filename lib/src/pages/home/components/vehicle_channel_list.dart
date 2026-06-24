@@ -44,6 +44,17 @@ class _VehicleChannelListState extends State<VehicleChannelList> {
     });
   }
 
+  void _showOfflineWarning(BuildContext context) {
+    ScaffoldMessenger.of(context).clearSnackBars();
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(
+        content: Text('Este veículo parece offline. A câmera pode não carregar.'),
+        duration: Duration(seconds: 3),
+        backgroundColor: Colors.orangeAccent,
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     return Column(
@@ -52,18 +63,26 @@ class _VehicleChannelListState extends State<VehicleChannelList> {
           padding: const EdgeInsets.all(16.0),
           child: TextField(
             controller: searchController,
-            decoration: const InputDecoration(
+            decoration: InputDecoration(
               labelText: 'Buscar veículo por placa',
-              labelStyle: TextStyle(color: Colors.white),
-              focusedBorder: OutlineInputBorder(
+              labelStyle: const TextStyle(color: Colors.white),
+              suffixIcon: searchController.text.isNotEmpty
+                  ? IconButton(
+                      icon: const Icon(Icons.clear, color: Colors.white70),
+                      onPressed: () {
+                        searchController.clear();
+                      },
+                    )
+                  : null,
+              focusedBorder: const OutlineInputBorder(
                 borderSide: BorderSide(color: Colors.white, width: 1),
                 borderRadius: BorderRadius.all(Radius.circular(8.0)),
               ),
-              enabledBorder: OutlineInputBorder(
+              enabledBorder: const OutlineInputBorder(
                 borderRadius: BorderRadius.all(Radius.circular(8.0)),
                 borderSide: BorderSide(color: Colors.white, width: 1),
               ),
-              errorBorder: OutlineInputBorder(
+              errorBorder: const OutlineInputBorder(
                 borderRadius: BorderRadius.all(Radius.circular(8.0)),
                 borderSide: BorderSide(color: Colors.red, width: 1),
               ),
@@ -72,51 +91,117 @@ class _VehicleChannelListState extends State<VehicleChannelList> {
           ),
         ),
         Expanded(
-          child: ListView.builder(
-            itemCount: filteredVehicles.length,
-            itemBuilder: (context, index) {
-              final vehicle = filteredVehicles[index];
-              final id = vehicle['deviceSerial'];
-              final selected = widget.selectedChannels[id] ?? [];
-
-              return ExpansionTile(
-                title: Row(
-                  children: [
-                    Icon(Icons.directions_car, color: vehicle['status'] == 'connected' ? Colors.green : Colors.red),
-                    const SizedBox(width: 8),
-                    Text(vehicle['plate'], style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
-                  ],
-                ),
-                children: [
-                  // --- LINHAS REMOVIDAS ---
-                  CheckboxListTile(
-                    title: const Text('Todos os Canais', style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
-                    value: selected.length == 6, // Assumindo 6 canais
-                    onChanged: (bool? val) {
-                      for (int i = 1; i <= 6; i++) {
-                        widget.onChannelToggle(vehicle, i, val ?? false);
-                      }
-                    },
-                    checkColor: Colors.white,
-                    activeColor: const Color(0xFF0794bc),
+          child: filteredVehicles.isEmpty
+              ? Padding(
+                  padding: const EdgeInsets.all(24.0),
+                  child: Center(
+                    child: SingleChildScrollView(
+                      child: Column(
+                        mainAxisAlignment: MainAxisAlignment.center,
+                        children: [
+                          const Icon(
+                            Icons.search_off,
+                            color: Colors.white54,
+                            size: 48,
+                          ),
+                          const SizedBox(height: 16),
+                          const Text(
+                            'Nenhum veículo encontrado para a busca atual. Verifique a placa digitada.',
+                            textAlign: TextAlign.center,
+                            style: TextStyle(
+                              color: Colors.white70,
+                              fontSize: 14,
+                            ),
+                          ),
+                          if (searchController.text.isNotEmpty) ...[
+                            const SizedBox(height: 16),
+                            ElevatedButton(
+                              onPressed: () {
+                                searchController.clear();
+                              },
+                              style: ElevatedButton.styleFrom(
+                                backgroundColor: const Color(0xFF0794bc),
+                                foregroundColor: Colors.white,
+                                shape: RoundedRectangleBorder(
+                                  borderRadius: BorderRadius.circular(8.0),
+                                ),
+                              ),
+                              child: const Text('Limpar busca'),
+                            ),
+                          ],
+                        ],
+                      ),
+                    ),
                   ),
-                  // ------------------------
-                  ...List.generate(6, (i) {
-                    final channel = i + 1;
-                    return CheckboxListTile(
-                      title: Text('Canal $channel', style: const TextStyle(color: Colors.white)),
-                      value: selected.contains(channel),
-                      onChanged: (bool? val) {
-                        widget.onChannelToggle(vehicle, channel, val ?? false);
-                      },
-                      checkColor: Colors.white,
-                      activeColor: const Color(0xFF0794bc),
+                )
+              : ListView.builder(
+                  itemCount: filteredVehicles.length,
+                  itemBuilder: (context, index) {
+                    final vehicle = filteredVehicles[index];
+                    final id = vehicle['deviceSerial'];
+                    final selected = widget.selectedChannels[id] ?? [];
+
+                    return ExpansionTile(
+                      title: Row(
+                        children: [
+                          Icon(Icons.local_shipping, color: vehicle['status'] == 'connected' ? Colors.green : Colors.red),
+                          const SizedBox(width: 8),
+                          Text(vehicle['plate'], style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
+                        ],
+                      ),
+                      children: [
+                        // --- LINHAS REMOVIDAS ---
+                        CheckboxListTile(
+                          title: Text(
+                            'Todos os Canais',
+                            style: TextStyle(
+                              color: selected.length == 6 ? const Color(0xFF0794bc) : Colors.white,
+                              fontWeight: FontWeight.bold,
+                            ),
+                          ),
+                          value: selected.length == 6, // Assumindo 6 canais
+                          selected: selected.length == 6,
+                          selectedTileColor: Colors.white.withOpacity(0.06),
+                          onChanged: (bool? val) {
+                            for (int i = 1; i <= 6; i++) {
+                              widget.onChannelToggle(vehicle, i, val ?? false);
+                            }
+                            if (val == true && vehicle['status'] != 'connected') {
+                              _showOfflineWarning(context);
+                            }
+                          },
+                          checkColor: Colors.white,
+                          activeColor: const Color(0xFF0794bc),
+                        ),
+                        // ------------------------
+                        ...List.generate(6, (i) {
+                          final channel = i + 1;
+                          final isChannelSelected = selected.contains(channel);
+                          return CheckboxListTile(
+                            title: Text(
+                              'Canal $channel',
+                              style: TextStyle(
+                                color: isChannelSelected ? const Color(0xFF0794bc) : Colors.white,
+                                fontWeight: isChannelSelected ? FontWeight.bold : FontWeight.normal,
+                              ),
+                            ),
+                            value: isChannelSelected,
+                            selected: isChannelSelected,
+                            selectedTileColor: Colors.white.withOpacity(0.06),
+                            onChanged: (bool? val) {
+                              widget.onChannelToggle(vehicle, channel, val ?? false);
+                              if (val == true && vehicle['status'] != 'connected') {
+                                _showOfflineWarning(context);
+                              }
+                            },
+                            checkColor: Colors.white,
+                            activeColor: const Color(0xFF0794bc),
+                          );
+                        }),
+                      ],
                     );
-                  }),
-                ],
-              );
-            },
-          ),
+                  },
+                ),
         ),
       ],
     );
