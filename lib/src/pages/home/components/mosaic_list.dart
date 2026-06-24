@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 
 class MosaicList extends StatefulWidget {
   final List<Map<String, dynamic>> mosaics;
+  final List<Map<String, dynamic>> vehicles;
   final void Function(Map<String, dynamic>) onLoad;
   final void Function(int) onDelete;
   final void Function(Map<String, dynamic> mosaic) onEdit; // Novo callback para edição
@@ -10,6 +11,7 @@ class MosaicList extends StatefulWidget {
   const MosaicList({
     super.key,
     required this.mosaics,
+    required this.vehicles,
     required this.onLoad,
     required this.onDelete,
     required this.onEdit, // Requerer o novo callback
@@ -22,6 +24,33 @@ class MosaicList extends StatefulWidget {
 class _MosaicListState extends State<MosaicList> {
   int? expandedIndex;
   int? expandedFrotaIndex;
+
+  String _getLiveStatus(Map<String, dynamic> veiculo) {
+    final deviceSerial = veiculo['deviceSerial'];
+    final plate = veiculo['plate'];
+    
+    if (deviceSerial != null) {
+      final liveVehicle = widget.vehicles.firstWhere(
+        (v) => v['deviceSerial'] == deviceSerial,
+        orElse: () => <String, dynamic>{},
+      );
+      if (liveVehicle.isNotEmpty) {
+        return liveVehicle['status'] ?? 'disconnected';
+      }
+    }
+    
+    if (plate != null) {
+      final liveVehicle = widget.vehicles.firstWhere(
+        (v) => v['plate'] == plate,
+        orElse: () => <String, dynamic>{},
+      );
+      if (liveVehicle.isNotEmpty) {
+        return liveVehicle['status'] ?? 'disconnected';
+      }
+    }
+    
+    return 'disconnected';
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -102,6 +131,8 @@ class _MosaicListState extends State<MosaicList> {
                             ...(frota['itens'] as List).map<Widget>((item) {
                               final veiculo = item['veiculo'];
                               final canal = item['canal'];
+                              final status = _getLiveStatus(veiculo);
+                              final isOnline = status == 'connected';
                               return ListTile(
                                 title: Text(
                                   veiculo['plate'] ?? 'Veículo sem nome',
@@ -111,7 +142,10 @@ class _MosaicListState extends State<MosaicList> {
                                   'Canal $canal',
                                   style: const TextStyle(color: Colors.white60),
                                 ),
-                                leading: Icon(Icons.local_shipping, color: veiculo['status'] != 'disconnected' ? Colors.green : Colors.red),
+                                leading: Icon(
+                                  Icons.local_shipping, 
+                                  color: isOnline ? Colors.green : Colors.red,
+                                ),
                               );
                             })
                           ],

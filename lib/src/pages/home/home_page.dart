@@ -692,7 +692,7 @@ class _HomePageState extends ConsumerState<HomePage> with WindowListener {
                                 ),
                                 padding: const EdgeInsets.symmetric(horizontal: 16.0, vertical: 8.0),
                               ),
-                              child: const Text('Veículos Diretos', style: TextStyle(color: Colors.white)),
+                              child: const Text('Câmeras por Veículo', style: TextStyle(color: Colors.white)),
                             ),
                           ],
                         ),
@@ -727,9 +727,50 @@ class _HomePageState extends ConsumerState<HomePage> with WindowListener {
                                   )
                                 : MosaicList(
                                     mosaics: mosaics,
+                                    vehicles: vehicles,
                                     onDelete: confirmDeleteMosaic,
                                     onLoad: (frota) {
                                       final List<Map<String, dynamic>> items = (frota['itens'] as List).cast<Map<String, dynamic>>();
+                                      
+                                      // Check if any vehicle in the loaded items is offline
+                                      bool hasOfflineVehicle = false;
+                                      for (var item in items) {
+                                        final deviceSerial = item['veiculo']?['deviceSerial'];
+                                        final plate = item['veiculo']?['plate'];
+                                        
+                                        // Try finding by deviceSerial
+                                        Map<String, dynamic> liveVehicle = {};
+                                        if (deviceSerial != null) {
+                                          liveVehicle = vehicles.firstWhere(
+                                            (v) => v['deviceSerial'] == deviceSerial,
+                                            orElse: () => <String, dynamic>{},
+                                          );
+                                        }
+                                        // Fallback to plate
+                                        if (liveVehicle.isEmpty && plate != null) {
+                                          liveVehicle = vehicles.firstWhere(
+                                            (v) => v['plate'] == plate,
+                                            orElse: () => <String, dynamic>{},
+                                          );
+                                        }
+                                        
+                                        if (liveVehicle.isEmpty || liveVehicle['status'] != 'connected') {
+                                          hasOfflineVehicle = true;
+                                          break;
+                                        }
+                                      }
+                                      
+                                      if (hasOfflineVehicle) {
+                                        ScaffoldMessenger.of(context).clearSnackBars();
+                                        ScaffoldMessenger.of(context).showSnackBar(
+                                          const SnackBar(
+                                            content: Text('Este veículo parece offline. A câmera pode não carregar.'),
+                                            duration: Duration(seconds: 4),
+                                            backgroundColor: Colors.orangeAccent,
+                                          ),
+                                        );
+                                      }
+
                                       _manageVideoStreams(newItems: items);
                                     },
                                     onEdit: (mosaicToEdit) {

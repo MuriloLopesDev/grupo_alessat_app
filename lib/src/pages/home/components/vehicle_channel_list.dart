@@ -141,12 +141,51 @@ class _VehicleChannelListState extends State<VehicleChannelList> {
                     final id = vehicle['deviceSerial'];
                     final selected = widget.selectedChannels[id] ?? [];
 
+                    final isOnline = vehicle['status'] == 'connected';
                     return ExpansionTile(
                       title: Row(
                         children: [
-                          Icon(Icons.local_shipping, color: vehicle['status'] == 'connected' ? Colors.green : Colors.red),
+                          Icon(
+                            Icons.local_shipping, 
+                            color: isOnline ? Colors.green : Colors.red,
+                            size: 20,
+                          ),
                           const SizedBox(width: 8),
-                          Text(vehicle['plate'], style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
+                          Flexible(
+                            child: Text(
+                              vehicle['plate'] ?? 'N/A', 
+                              overflow: TextOverflow.ellipsis,
+                              style: const TextStyle(
+                                color: Colors.white, 
+                                fontWeight: FontWeight.bold,
+                                fontSize: 14.0,
+                              ),
+                            ),
+                          ),
+                          const SizedBox(width: 8),
+                          Container(
+                            padding: const EdgeInsets.symmetric(horizontal: 6.0, vertical: 2.0),
+                            decoration: BoxDecoration(
+                              color: isOnline 
+                                  ? Colors.green.withOpacity(0.15) 
+                                  : Colors.red.withOpacity(0.15),
+                              borderRadius: BorderRadius.circular(4.0),
+                              border: Border.all(
+                                color: isOnline 
+                                    ? Colors.green.withOpacity(0.3) 
+                                    : Colors.red.withOpacity(0.3),
+                                width: 0.5,
+                              ),
+                            ),
+                            child: Text(
+                              isOnline ? 'Online' : 'Offline',
+                              style: TextStyle(
+                                color: isOnline ? Colors.greenAccent : Colors.redAccent,
+                                fontSize: 10.0,
+                                fontWeight: FontWeight.bold,
+                              ),
+                            ),
+                          ),
                         ],
                       ),
                       children: [
