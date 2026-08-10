@@ -1,4 +1,3 @@
-import 'dart:math';
 import 'dart:async';
 
 import 'package:flutter/material.dart';
@@ -33,19 +32,25 @@ class HomePage extends ConsumerStatefulWidget {
 }
 
 class _HomePageState extends ConsumerState<HomePage> with WindowListener {
+  static const int _maxActiveStreams = 32;
+  static const int _maxStreamPreparationAttempts = 5;
+
   // Mapas para gerenciar players e controladores de cada vídeo
   final Map<String, Player> players = {};
   final Map<String, VideoController> controllers = {};
   // Novo mapa para gerenciar o status de cada URL de vídeo individualmente
   final Map<String, VideoStreamStatus> videoStatuses = {};
   final Map<String, String> videoErrors = {};
-  final Map<String, Timer> _reconnectTimers = {};
-  final Map<String, int> _retryCounts = {};
+  final Map<String, StreamSubscription<dynamic>> _playerSubscriptions = {};
+  final Set<String> _loadingUrls = {};
+  Set<String> _desiredVideoUrls = {};
+  int _selectionRevision = 0;
 
   // Mapa para armazenar metadados (placa e canal) por URL de vídeo
   final Map<String, Map<String, dynamic>> _videoMetadata = {};
 
-  List<String> _currentVideoOrder = []; // Ordem atual dos vídeos exibidos no grid
+  List<String> _currentVideoOrder =
+      []; // Ordem atual dos vídeos exibidos no grid
 
   bool isLoadingGlobal = false;
   bool showMosaicList = true;
@@ -53,7 +58,7 @@ class _HomePageState extends ConsumerState<HomePage> with WindowListener {
 
   bool _showLists = true;
 
-  Map<String, List<int>> _selectedDirectChannels = {};
+  final Map<String, List<int>> _selectedDirectChannels = {};
 
   @override
   void initState() {
@@ -80,13 +85,17 @@ class _HomePageState extends ConsumerState<HomePage> with WindowListener {
   @override
   void dispose() {
     windowManager.removeListener(this);
-    for (var timer in _reconnectTimers.values) {
-      timer.cancel();
+    _selectionRevision++;
+    _desiredVideoUrls.clear();
+    for (final subscription in _playerSubscriptions.values) {
+      unawaited(subscription.cancel());
     }
-    _reconnectTimers.clear();
-    for (var player in players.values) {
-      player.dispose();
+    for (final player in players.values) {
+      unawaited(player.dispose());
     }
+    _playerSubscriptions.clear();
+    players.clear();
+    controllers.clear();
     super.dispose();
   }
 
@@ -97,6 +106,23 @@ class _HomePageState extends ConsumerState<HomePage> with WindowListener {
     await windowManager.maximize();
   }
 
+  Future<void> _disposePlayer(String url) async {
+    final subscription = _playerSubscriptions.remove(url);
+    final player = players.remove(url);
+    controllers.remove(url);
+
+    await subscription?.cancel();
+    await player?.dispose();
+  }
+
+  Future<void> _disposeAllPlayers() async {
+    final urls = <String>{
+      ...players.keys,
+      ..._playerSubscriptions.keys,
+    };
+    await Future.wait(urls.map(_disposePlayer));
+  }
+
   Future<void> confirmDeleteMosaic(int index) async {
     bool? confirm = await showDialog<bool>(
       context: context,
@@ -105,7 +131,10 @@ class _HomePageState extends ConsumerState<HomePage> with WindowListener {
           backgroundColor: const Color.fromARGB(255, 25, 32, 37),
           title: const Text(
             'Confirmar Exclusão',
-            style: TextStyle(color: Colors.white, fontSize: 18.0, fontWeight: FontWeight.bold),
+            style: TextStyle(
+                color: Colors.white,
+                fontSize: 18.0,
+                fontWeight: FontWeight.bold),
           ),
           content: const Text(
             'Tem certeza que deseja excluir este mosaico?',
@@ -145,17 +174,19 @@ class _HomePageState extends ConsumerState<HomePage> with WindowListener {
         final List<Map<String, dynamic>> itensToClear = [];
 
         for (var frota in (mosaicToDelete['frotas'] as List)) {
-          itensToClear.addAll((frota['itens'] as List).cast<Map<String, dynamic>>());
+          itensToClear
+              .addAll((frota['itens'] as List).cast<Map<String, dynamic>>());
         }
 
+        _selectionRevision++;
+        _desiredVideoUrls.clear();
         await _clearMosaicVideos(itensToClear);
+        await _disposeAllPlayers();
         ref.read(mosaicsProvider.notifier).deleteMosaic(index);
 
+        if (!mounted) return;
         setState(() {
           _currentVideoOrder.clear();
-          players.forEach((key, value) => value.dispose());
-          players.clear();
-          controllers.clear();
           videoStatuses.clear();
           videoErrors.clear();
           _videoMetadata.clear();
@@ -167,146 +198,150 @@ class _HomePageState extends ConsumerState<HomePage> with WindowListener {
   }
 
   Future<void> _clearMosaicVideos(List<Map<String, dynamic>> items) async {
-    List<Future<void>> futures = [];
-    Set<String> urlsToDispose = {};
+    final Set<String> urlsToDispose = {};
 
     for (var item in items) {
       final canal = item['canal'];
       final deviceSerial = item['veiculo']?['deviceSerial'];
 
       if (deviceSerial != null) {
-        final urlBaseVideo = 'https://moovsec.alessat.com.br:3010/live/${deviceSerial}_$canal';
+        final urlBaseVideo =
+            'https://moovsec.alessat.com.br:3010/live/${deviceSerial}_$canal';
         urlsToDispose.add(urlBaseVideo);
       }
     }
 
-    for (var url in urlsToDispose) {
-      _reconnectTimers[url]?.cancel();
-      _reconnectTimers.remove(url);
-      _retryCounts.remove(url);
-      if (players.containsKey(url)) {
-        futures.add(Future.sync(() async {
-          players[url]?.dispose();
-          players.remove(url);
-          controllers.remove(url);
-          videoStatuses.remove(url);
-          videoErrors.remove(url);
-          _videoMetadata.remove(url);
-        }));
-      }
-    }
+    await Future.wait(urlsToDispose.map(_disposePlayer));
 
+    if (!mounted) return;
     setState(() {
-      _currentVideoOrder.removeWhere((url) => urlsToDispose.contains(url));
-    });
-
-    try {
-      await Future.wait(futures);
-    } catch (e) {
-      print('Error waiting for futures to clear videos: $e');
-    }
-  }
-
-  Future<void> _manageVideoStreams({required List<Map<String, dynamic>> newItems}) async {
-    final Set<String> newUrls = {};
-    final apiService = ref.read(apiServiceProvider);
-    final String token = widget.token;
-
-    final Map<String, Map<String, dynamic>> tempNewVideoMetadata = {};
-
-    for (var item in newItems) {
-      final deviceSerial = item['veiculo']['deviceSerial'];
-      final canal = item['canal'];
-      final url = 'https://moovsec.alessat.com.br:3010/live/${deviceSerial}_$canal';
-      newUrls.add(url);
-      tempNewVideoMetadata[url] = {
-        'plate': item['veiculo']['plate'],
-        'channel': canal,
-        'deviceSerial': deviceSerial, // Adicionar deviceSerial aqui para fácil acesso
-      };
-    }
-
-    final List<String> urlsToRemove = players.keys.where((url) => !newUrls.contains(url)).toList();
-    for (var url in urlsToRemove) {
-      _reconnectTimers[url]?.cancel();
-      _reconnectTimers.remove(url);
-      _retryCounts.remove(url);
-      players[url]?.dispose();
-      players.remove(url);
-      controllers.remove(url);
-      setState(() {
+      _currentVideoOrder.removeWhere(urlsToDispose.contains);
+      for (final url in urlsToDispose) {
         videoStatuses.remove(url);
         videoErrors.remove(url);
         _videoMetadata.remove(url);
-        _currentVideoOrder.remove(url);
-      });
+      }
+    });
+  }
+
+  Future<void> _manageVideoStreams(
+      {required List<Map<String, dynamic>> newItems}) async {
+    final revision = ++_selectionRevision;
+    final apiService = ref.read(apiServiceProvider);
+    final String token = widget.token;
+    final Map<String, Map<String, dynamic>> uniqueItems = {};
+    final Map<String, Map<String, dynamic>> tempNewVideoMetadata = {};
+
+    for (final item in newItems) {
+      final vehicle = item['veiculo'];
+      if (vehicle is! Map || vehicle['deviceSerial'] == null) continue;
+      final deviceSerial = vehicle['deviceSerial'].toString().trim();
+      if (deviceSerial.isEmpty) continue;
+      final canal = item['canal'] is int
+          ? item['canal'] as int
+          : int.tryParse(item['canal'].toString()) ?? 1;
+      final url =
+          'https://moovsec.alessat.com.br:3010/live/${deviceSerial}_$canal';
+      uniqueItems.putIfAbsent(url, () => item);
+      tempNewVideoMetadata.putIfAbsent(
+          url,
+          () => {
+                'plate': vehicle['plate'],
+                'channel': canal,
+                'deviceSerial': deviceSerial,
+              });
     }
 
-    final List<Future<void>> loadTasks = [];
-    final List<String> tempCurrentOrder = [];
+    final limitedEntries = uniqueItems.entries.take(_maxActiveStreams).toList();
+    final selectedUrls = limitedEntries.map((entry) => entry.key).toList();
+    final selectedUrlSet = selectedUrls.toSet();
+    _desiredVideoUrls = selectedUrlSet;
 
-    for (var item in newItems) {
-      final deviceSerial = item['veiculo']['deviceSerial'];
-      final canal = item['canal'];
-      final urlBaseVideo = 'https://moovsec.alessat.com.br:3010/live/${deviceSerial}_$canal';
-
-      tempCurrentOrder.add(urlBaseVideo);
-
-      if (!players.containsKey(urlBaseVideo) || videoStatuses[urlBaseVideo] == VideoStreamStatus.error) {
-        setState(() {
-          videoStatuses[urlBaseVideo] = VideoStreamStatus.loading;
-          videoErrors.remove(urlBaseVideo);
-        });
-        _reconnectTimers[urlBaseVideo]?.cancel();
-        _reconnectTimers.remove(urlBaseVideo);
-        _retryCounts[urlBaseVideo] = 0;
-        loadTasks.add(_loadSingleVideo(urlBaseVideo, deviceSerial, canal, item['veiculo'], apiService, token));
-      } else {
-        if (videoStatuses[urlBaseVideo] != VideoStreamStatus.loaded) {
-          setState(() {
-            videoStatuses[urlBaseVideo] = VideoStreamStatus.loaded;
-            videoErrors.remove(urlBaseVideo);
-          });
-        }
+    final urlsToRemove = players.keys
+        .where((url) => !selectedUrlSet.contains(url))
+        .toList(growable: false);
+    final requestedUrlsToLoad = <String>[];
+    for (final url in selectedUrls) {
+      if (!players.containsKey(url) && !_loadingUrls.contains(url)) {
+        requestedUrlsToLoad.add(url);
       }
     }
 
+    if (!mounted) return;
     setState(() {
-      _currentVideoOrder = tempCurrentOrder;
-      _videoMetadata.clear();
-      _videoMetadata.addAll(tempNewVideoMetadata);
+      _currentVideoOrder = selectedUrls;
+      _videoMetadata
+        ..clear()
+        ..addEntries(tempNewVideoMetadata.entries
+            .where((entry) => selectedUrlSet.contains(entry.key)));
+      for (final url in urlsToRemove) {
+        videoStatuses.remove(url);
+        videoErrors.remove(url);
+      }
+      for (final url in requestedUrlsToLoad) {
+        videoStatuses[url] = VideoStreamStatus.loading;
+        videoErrors.remove(url);
+      }
     });
+
+    // Libera os streams antigos antes de solicitar novos ao servidor.
+    await Future.wait(urlsToRemove.map(_disposePlayer));
+    if (!mounted || revision != _selectionRevision) return;
+
+    final actualUrlsToLoad = <String>[];
+    for (final url in selectedUrls) {
+      if (!players.containsKey(url) && _loadingUrls.add(url)) {
+        actualUrlsToLoad.add(url);
+      }
+    }
+
+    if (uniqueItems.length > _maxActiveStreams) {
+      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+        content: Text(
+          'Cada visualizacao aceita no maximo 32 cameras simultaneas.',
+        ),
+      ));
+    }
+
+    final loadTasks = <Future<void>>[];
+    for (final entry in limitedEntries) {
+      if (!actualUrlsToLoad.contains(entry.key)) continue;
+      final item = entry.value;
+      final vehicle = item['veiculo'] as Map;
+      final deviceSerial = vehicle['deviceSerial'].toString();
+      final canal = item['canal'] is int
+          ? item['canal'] as int
+          : int.tryParse(item['canal'].toString()) ?? 1;
+      loadTasks.add(_loadSingleVideo(
+          entry.key, deviceSerial, canal, vehicle, apiService, token));
+    }
 
     try {
       await Future.wait(loadTasks);
     } catch (e) {
       print('Erro ao gerenciar streams de vídeo: $e');
     } finally {
-      setState(() {
-        isLoadingGlobal = false;
-      });
+      if (mounted && revision == _selectionRevision) {
+        setState(() {
+          isLoadingGlobal = false;
+        });
+      }
     }
   }
 
   // NOVO: Método para remover um vídeo da grid E atualizar a seleção direta
-  void _removeVideoFromGrid(String videoUrl) {
+  Future<void> _removeVideoFromGrid(String videoUrl) async {
+    _desiredVideoUrls.remove(videoUrl);
     setState(() {
-      _reconnectTimers[videoUrl]?.cancel();
-      _reconnectTimers.remove(videoUrl);
-      _retryCounts.remove(videoUrl);
-      // 1. Descartar player e remover da grid
       _currentVideoOrder.remove(videoUrl);
-      if (players.containsKey(videoUrl)) {
-        players[videoUrl]?.dispose();
-        players.remove(videoUrl);
-        controllers.remove(videoUrl);
-      }
       videoStatuses.remove(videoUrl);
       videoErrors.remove(videoUrl);
 
       // 2. Tentar atualizar _selectedDirectChannels
       final metadata = _videoMetadata[videoUrl];
-      if (metadata != null && metadata.containsKey('deviceSerial') && metadata.containsKey('channel')) {
+      if (metadata != null &&
+          metadata.containsKey('deviceSerial') &&
+          metadata.containsKey('channel')) {
         final deviceSerial = metadata['deviceSerial'] as String;
         final channel = metadata['channel'] as int;
 
@@ -321,25 +356,13 @@ class _HomePageState extends ConsumerState<HomePage> with WindowListener {
       // 3. Remover metadados do vídeo
       _videoMetadata.remove(videoUrl);
     });
+    await _disposePlayer(videoUrl);
   }
 
-  void _clearAllVideos() {
+  Future<void> _clearAllVideos() async {
+    _selectionRevision++;
+    _desiredVideoUrls.clear();
     setState(() {
-      for (var timer in _reconnectTimers.values) {
-        timer.cancel();
-      }
-      _reconnectTimers.clear();
-      _retryCounts.clear();
-
-      for (var player in players.values) {
-        try {
-          player.dispose();
-        } catch (e) {
-          print('Erro ao descartar player durante limpeza: $e');
-        }
-      }
-      players.clear();
-      controllers.clear();
       videoStatuses.clear();
       videoErrors.clear();
       _videoMetadata.clear();
@@ -347,233 +370,161 @@ class _HomePageState extends ConsumerState<HomePage> with WindowListener {
       _selectedDirectChannels.clear();
       isLoadingGlobal = false;
     });
-  }
-
-  void _handleLoadError({
-    required String urlBaseVideo,
-    required String deviceSerial,
-    required dynamic canal,
-    required dynamic veiculo,
-    required ApiService apiService,
-    required String token,
-    required String errorMsg,
-    bool isThumbnailRetry = false,
-    bool disposePlayer = false,
-  }) {
-    if (!mounted || !_currentVideoOrder.contains(urlBaseVideo)) {
-      return;
-    }
-
-    final currentRetries = _retryCounts[urlBaseVideo] ?? 0;
-    if (currentRetries >= 5) {
-      setState(() {
-        if (disposePlayer) {
-          if (players.containsKey(urlBaseVideo)) {
-            players[urlBaseVideo]?.dispose();
-            players.remove(urlBaseVideo);
-            controllers.remove(urlBaseVideo);
-          }
-        }
-        videoStatuses[urlBaseVideo] = VideoStreamStatus.error;
-        videoErrors[urlBaseVideo] = errorMsg;
-      });
-      return;
-    }
-
-    _retryCounts[urlBaseVideo] = currentRetries + 1;
-
-    setState(() {
-      if (disposePlayer) {
-        if (players.containsKey(urlBaseVideo)) {
-          players[urlBaseVideo]?.dispose();
-          players.remove(urlBaseVideo);
-          controllers.remove(urlBaseVideo);
-        }
-      }
-      videoStatuses[urlBaseVideo] = VideoStreamStatus.loading;
-    });
-
-    _reconnectTimers[urlBaseVideo]?.cancel();
-    _reconnectTimers[urlBaseVideo] = Timer(
-      Duration(seconds: isThumbnailRetry ? 2 : 3),
-      () {
-        if (!mounted || !_currentVideoOrder.contains(urlBaseVideo)) return;
-        _loadSingleVideo(
-          urlBaseVideo,
-          deviceSerial,
-          canal,
-          veiculo,
-          apiService,
-          token,
-        );
-      },
-    );
+    await _disposeAllPlayers();
   }
 
   Future<void> _loadSingleVideo(
     String urlBaseVideo,
     String deviceSerial,
-    dynamic canal,
+    int canal,
     dynamic veiculo,
     ApiService apiService,
     String token,
   ) async {
+    Player? createdPlayer;
+    StreamSubscription<dynamic>? errorSubscription;
     try {
-      final urlData = await apiService.liveMedia(deviceSerial, token, canal).timeout(const Duration(seconds: 15));
-      if (!mounted || !_currentVideoOrder.contains(urlBaseVideo)) {
-        return;
+      String? address;
+      var isTemporaryImage = false;
+      for (var attempt = 1;
+          attempt <= _maxStreamPreparationAttempts;
+          attempt++) {
+        if (!mounted || !_desiredVideoUrls.contains(urlBaseVideo)) return;
+
+        final urlData = await apiService.liveMedia(deviceSerial, token, canal);
+        address = urlData?['address']?.toString().trim();
+        final lowerAddress = address?.toLowerCase() ?? '';
+        isTemporaryImage = urlData?['isThumbnail'] == true ||
+            lowerAddress.endsWith('.jpg') ||
+            lowerAddress.endsWith('.jpeg') ||
+            lowerAddress.endsWith('.png');
+
+        if (address != null && address.isNotEmpty && !isTemporaryImage) {
+          break;
+        }
+
+        if (attempt < _maxStreamPreparationAttempts) {
+          final delaySeconds = (1 << (attempt - 1)).clamp(1, 8);
+          await Future.delayed(Duration(seconds: delaySeconds));
+        }
       }
-      if (urlData != null && urlData.isNotEmpty) {
-        final address = urlData['address']?.toString();
-        final isThumbnail = urlData['isThumbnail'] == true;
 
-        print('liveMedia data [$deviceSerial canal $canal]: $urlData');
+      if (!mounted || !_desiredVideoUrls.contains(urlBaseVideo)) return;
+      if (address == null || address.isEmpty || isTemporaryImage) {
+        throw TimeoutException(
+          'Câmera offline ou sem HLS após '
+          '$_maxStreamPreparationAttempts tentativas.',
+        );
+      }
 
-        if (address == null || address.isEmpty) {
-          _handleLoadError(
-            urlBaseVideo: urlBaseVideo,
-            deviceSerial: deviceSerial,
-            canal: canal,
-            veiculo: veiculo,
-            apiService: apiService,
-            token: token,
-            errorMsg: 'API não retornou endereço de mídia para $deviceSerial canal $canal',
-          );
-          return;
-        }
+      final lowerAddress = address.toLowerCase();
+      if (!lowerAddress.endsWith('.m3u8')) {
+        throw FormatException('A mídia retornada não é HLS: $address');
+      }
 
-        if (isThumbnail || address.toLowerCase().endsWith('.jpg') || address.toLowerCase().endsWith('.jpeg') || address.toLowerCase().endsWith('.png')) {
-          print('Stream ainda não pronto para $deviceSerial canal $canal. Retornou thumbnail: $address');
+      final actualStreamUrl = address.startsWith('http')
+          ? address
+          : '${apiService.baseUrlMedia}$address';
+      print(
+          'URL FINAL DO STREAM [$deviceSerial canal $canal]: $actualStreamUrl');
 
-          _handleLoadError(
-            urlBaseVideo: urlBaseVideo,
-            deviceSerial: deviceSerial,
-            canal: canal,
-            veiculo: veiculo,
-            apiService: apiService,
-            token: token,
-            errorMsg: 'Câmera offline (limite de tentativas excedido)',
-            isThumbnailRetry: true,
-          );
-          return;
-        }
+      final player = Player(
+          configuration: const PlayerConfiguration(
+        vo: 'gpu',
+        bufferSize: 4 * 1024 * 1024,
+      ));
+      createdPlayer = player;
+      final controller = VideoController(player);
 
-        final actualStreamUrl = address.startsWith('http')
-            ? address
-            : '${apiService.baseUrlMedia}$address';
+      final media = Media(actualStreamUrl, httpHeaders: {
+        'Authorization': 'Bearer $token',
+        'Cache-Control': 'max-age=0, no-cache',
+        'Pragma': 'no-cache',
+        'Accept': 'application/vnd.apple.mpegurl, application/x-mpegURL, */*',
+        'User-Agent': 'grupo_alessat_app/2.0.2',
+      });
 
-        print('URL FINAL DO STREAM [$deviceSerial canal $canal]: $actualStreamUrl');
-
-        if (!mounted || !_currentVideoOrder.contains(urlBaseVideo)) {
-          return;
-        }
-
-        if (players.containsKey(urlBaseVideo)) {
-          players[urlBaseVideo]?.dispose();
-          players.remove(urlBaseVideo);
-          controllers.remove(urlBaseVideo);
-        }
-
-        final player = Player(
-            configuration: const PlayerConfiguration(
-          vo: 'gpu',
-          bufferSize: 4 * 1024 * 1024,
+      errorSubscription = player.stream.error.listen((error) {
+        print('Player para $actualStreamUrl encontrou um erro: "$error".');
+        unawaited(_handlePlayerError(
+          urlBaseVideo,
+          player,
+          'Erro ao abrir stream: $error',
         ));
-        final controller = VideoController(player);
+      });
 
-        final headers = {
-          'Authorization': 'Bearer $token',
-          'Cache-Control': 'max-age=0, no-cache',
-          'Pragma': 'no-cache',
-          'Accept': 'application/vnd.apple.mpegurl, application/x-mpegURL, */*',
-          'User-Agent': 'grupo_alessat_app/1.0',
-        };
+      await player.open(media, play: true);
+      await player.setVolume(0);
 
-        final media = Media(
-          actualStreamUrl,
-          httpHeaders: headers,
-        );
+      if (!mounted || !_desiredVideoUrls.contains(urlBaseVideo)) return;
 
-        void reconnect() {
-          _reconnectTimers[urlBaseVideo]?.cancel();
-          _reconnectTimers[urlBaseVideo] = Timer(Duration(seconds: 2 + Random().nextInt(4)), () {
-            if (!mounted || !players.containsKey(urlBaseVideo) || !_currentVideoOrder.contains(urlBaseVideo)) return;
-            try {
-              if (mounted) {
-                setState(() {
-                  videoStatuses[urlBaseVideo] = VideoStreamStatus.loading;
-                });
-              }
-              player.open(media, play: true);
-            } catch (e) {
-              print('Não foi possível reconectar $actualStreamUrl, player provavelmente já foi descartado. Erro: $e');
-            }
-          });
-        }
-
-        player.stream.completed.listen((isCompleted) {
-          if (isCompleted) {
-            print('Player para $actualStreamUrl foi completado. Tentando reconectar...');
-            reconnect();
-          }
-        });
-
-        player.stream.error.listen((error) {
-          print('Player para $actualStreamUrl encontrou um erro: "$error".');
-          _handleLoadError(
-            urlBaseVideo: urlBaseVideo,
-            deviceSerial: deviceSerial,
-            canal: canal,
-            veiculo: veiculo,
-            apiService: apiService,
-            token: token,
-            errorMsg: 'Erro ao abrir stream: $error',
-            disposePlayer: true,
-          );
-        });
-
-        player.stream.playing.listen((isPlaying) {
-          if (isPlaying) {
-            _retryCounts[urlBaseVideo] = 0;
-          }
-        });
-
-        await player.open(media, play: true);
-        await player.setVolume(0);
-
-        if (!mounted || !_currentVideoOrder.contains(urlBaseVideo)) {
-          player.dispose();
-          return;
-        }
-
-        setState(() {
-          players[urlBaseVideo] = player;
-          controllers[urlBaseVideo] = controller;
-          videoStatuses[urlBaseVideo] = VideoStreamStatus.loaded;
-          videoErrors.remove(urlBaseVideo);
-        });
-      } else {
-        _handleLoadError(
-          urlBaseVideo: urlBaseVideo,
-          deviceSerial: deviceSerial,
-          canal: canal,
-          veiculo: veiculo,
-          apiService: apiService,
-          token: token,
-          errorMsg: 'Erro ao carregar canal $canal da placa: ${veiculo['plate'] ?? deviceSerial}',
-        );
-      }
+      setState(() {
+        players[urlBaseVideo] = player;
+        controllers[urlBaseVideo] = controller;
+        _playerSubscriptions[urlBaseVideo] = errorSubscription!;
+        videoStatuses[urlBaseVideo] = VideoStreamStatus.loaded;
+        videoErrors.remove(urlBaseVideo);
+      });
+      createdPlayer = null;
+      errorSubscription = null;
     } catch (e) {
-      _handleLoadError(
-        urlBaseVideo: urlBaseVideo,
-        deviceSerial: deviceSerial,
-        canal: canal,
-        veiculo: veiculo,
-        apiService: apiService,
-        token: token,
-        errorMsg: 'Erro ao obter mídia do dispositivo: $deviceSerial (canal: $canal). Erro: $e',
-      );
+      if (!mounted || !_desiredVideoUrls.contains(urlBaseVideo)) return;
+      setState(() {
+        videoStatuses[urlBaseVideo] = VideoStreamStatus.error;
+        videoErrors[urlBaseVideo] =
+            'Erro ao obter mídia do dispositivo: $deviceSerial '
+            '(canal: $canal). Erro: $e';
+      });
+    } finally {
+      _loadingUrls.remove(urlBaseVideo);
+      await errorSubscription?.cancel();
+      await createdPlayer?.dispose();
     }
+  }
+
+  Future<void> _handlePlayerError(
+      String url, Player player, String error) async {
+    if (!mounted || players[url] != player) return;
+    setState(() {
+      videoStatuses[url] = VideoStreamStatus.error;
+      videoErrors[url] = error;
+    });
+    await _disposePlayer(url);
+  }
+
+  Future<void> _retrySingleVideo(String url) async {
+    if (!_desiredVideoUrls.contains(url) || _loadingUrls.contains(url)) return;
+    final metadata = _videoMetadata[url];
+    if (metadata == null) return;
+
+    await _disposePlayer(url);
+    if (!mounted ||
+        !_desiredVideoUrls.contains(url) ||
+        !_loadingUrls.add(url)) {
+      return;
+    }
+
+    final deviceSerial = metadata['deviceSerial'].toString();
+    final canal = metadata['channel'] is int
+        ? metadata['channel'] as int
+        : int.tryParse(metadata['channel'].toString()) ?? 1;
+    setState(() {
+      videoStatuses[url] = VideoStreamStatus.loading;
+      videoErrors.remove(url);
+    });
+
+    await _loadSingleVideo(
+      url,
+      deviceSerial,
+      canal,
+      {
+        'deviceSerial': deviceSerial,
+        'plate': metadata['plate'],
+        'status': 'connected',
+      },
+      ref.read(apiServiceProvider),
+      widget.token,
+    );
   }
 
   void _enterFullScreen(String url) {
@@ -596,29 +547,33 @@ class _HomePageState extends ConsumerState<HomePage> with WindowListener {
     });
   }
 
-  void _switchToListMode(bool toMosaicList) {
+  Future<void> _switchToListMode(bool toMosaicList) async {
+    _selectionRevision++;
+    _desiredVideoUrls.clear();
     setState(() {
       showMosaicList = toMosaicList;
       showVehicleDirectList = !toMosaicList;
       _currentVideoOrder.clear();
       _selectedDirectChannels.clear();
 
-      players.forEach((key, value) => value.dispose());
-      players.clear();
-      controllers.clear();
       videoStatuses.clear();
       videoErrors.clear();
       _videoMetadata.clear();
       isLoadingGlobal = false;
     });
+    await _disposeAllPlayers();
   }
 
-  void _onChannelToggleDirect(Map<String, dynamic> vehicle, int channel, bool isSelected) async {
+  void _onChannelToggleDirect(
+      Map<String, dynamic> vehicle, int channel, bool isSelected) async {
     final deviceSerial = vehicle['deviceSerial'];
     setState(() {
       _selectedDirectChannels.putIfAbsent(deviceSerial, () => []);
       if (isSelected) {
-        _selectedDirectChannels[deviceSerial]?.add(channel);
+        if (!(_selectedDirectChannels[deviceSerial]?.contains(channel) ??
+            false)) {
+          _selectedDirectChannels[deviceSerial]?.add(channel);
+        }
       } else {
         _selectedDirectChannels[deviceSerial]?.remove(channel);
         if (_selectedDirectChannels[deviceSerial]?.isEmpty ?? false) {
@@ -630,11 +585,13 @@ class _HomePageState extends ConsumerState<HomePage> with WindowListener {
     _manageVideoStreams(newItems: _getSelectedDirectVideoItems(vehicles));
   }
 
-  List<Map<String, dynamic>> _getSelectedDirectVideoItems(List<Map<String, dynamic>> allVehicles) {
+  List<Map<String, dynamic>> _getSelectedDirectVideoItems(
+      List<Map<String, dynamic>> allVehicles) {
     return _selectedDirectChannels.entries.expand((entry) {
       final deviceSerial = entry.key;
       final channels = entry.value;
-      final vehicle = allVehicles.firstWhere((v) => v['deviceSerial'] == deviceSerial);
+      final vehicle =
+          allVehicles.firstWhere((v) => v['deviceSerial'] == deviceSerial);
       return channels.map((channel) => {
             'canal': channel,
             'veiculo': {
@@ -660,7 +617,8 @@ class _HomePageState extends ConsumerState<HomePage> with WindowListener {
               Visibility(
                 visible: _showLists,
                 child: SizedBox(
-                  width: (MediaQuery.of(context).size.width * 0.22).clamp(280.0, 340.0),
+                  width: (MediaQuery.of(context).size.width * 0.22)
+                      .clamp(280.0, 340.0),
                   child: Column(
                     children: [
                       Padding(
@@ -673,26 +631,34 @@ class _HomePageState extends ConsumerState<HomePage> with WindowListener {
                             ElevatedButton(
                               onPressed: () => _switchToListMode(true),
                               style: ElevatedButton.styleFrom(
-                                backgroundColor: showMosaicList ? const Color(0xFF0794bc) : Colors.transparent,
+                                backgroundColor: showMosaicList
+                                    ? const Color(0xFF0794bc)
+                                    : Colors.transparent,
                                 side: const BorderSide(color: Colors.white),
                                 shape: RoundedRectangleBorder(
                                   borderRadius: BorderRadius.circular(8.0),
                                 ),
-                                padding: const EdgeInsets.symmetric(horizontal: 16.0, vertical: 8.0),
+                                padding: const EdgeInsets.symmetric(
+                                    horizontal: 16.0, vertical: 8.0),
                               ),
-                              child: const Text('Mosaicos', style: TextStyle(color: Colors.white)),
+                              child: const Text('Mosaicos',
+                                  style: TextStyle(color: Colors.white)),
                             ),
                             ElevatedButton(
                               onPressed: () => _switchToListMode(false),
                               style: ElevatedButton.styleFrom(
-                                backgroundColor: showVehicleDirectList ? const Color(0xFF0794bc) : Colors.transparent,
+                                backgroundColor: showVehicleDirectList
+                                    ? const Color(0xFF0794bc)
+                                    : Colors.transparent,
                                 side: const BorderSide(color: Colors.white),
                                 shape: RoundedRectangleBorder(
                                   borderRadius: BorderRadius.circular(8.0),
                                 ),
-                                padding: const EdgeInsets.symmetric(horizontal: 16.0, vertical: 8.0),
+                                padding: const EdgeInsets.symmetric(
+                                    horizontal: 16.0, vertical: 8.0),
                               ),
-                              child: const Text('Câmeras por Veículo', style: TextStyle(color: Colors.white)),
+                              child: const Text('Câmeras por Veículo',
+                                  style: TextStyle(color: Colors.white)),
                             ),
                           ],
                         ),
@@ -707,21 +673,28 @@ class _HomePageState extends ConsumerState<HomePage> with WindowListener {
                                           context: context,
                                           builder: (_) => AddMosaicoDialog(
                                             vehicles: vehicles,
-                                            onSave: ref.read(mosaicsProvider.notifier).loadMosaics,
+                                            onSave: ref
+                                                .read(mosaicsProvider.notifier)
+                                                .loadMosaics,
                                           ),
                                         );
                                       },
                                       style: ElevatedButton.styleFrom(
                                         backgroundColor: Colors.transparent,
-                                        side: const BorderSide(color: Colors.white),
+                                        side: const BorderSide(
+                                            color: Colors.white),
                                         shape: RoundedRectangleBorder(
-                                          borderRadius: BorderRadius.circular(8.0),
+                                          borderRadius:
+                                              BorderRadius.circular(8.0),
                                         ),
-                                        padding: const EdgeInsets.symmetric(horizontal: 24.0, vertical: 12.0),
+                                        padding: const EdgeInsets.symmetric(
+                                            horizontal: 24.0, vertical: 12.0),
                                       ),
                                       child: const Text(
                                         'Adicionar mosaico',
-                                        style: TextStyle(color: Colors.white, fontSize: 18.0),
+                                        style: TextStyle(
+                                            color: Colors.white,
+                                            fontSize: 18.0),
                                       ),
                                     ),
                                   )
@@ -730,43 +703,55 @@ class _HomePageState extends ConsumerState<HomePage> with WindowListener {
                                     vehicles: vehicles,
                                     onDelete: confirmDeleteMosaic,
                                     onLoad: (frota) {
-                                      final List<Map<String, dynamic>> items = (frota['itens'] as List).cast<Map<String, dynamic>>();
-                                      
+                                      final List<Map<String, dynamic>> items =
+                                          (frota['itens'] as List)
+                                              .cast<Map<String, dynamic>>();
+
                                       // Check if any vehicle in the loaded items is offline
                                       bool hasOfflineVehicle = false;
                                       for (var item in items) {
-                                        final deviceSerial = item['veiculo']?['deviceSerial'];
+                                        final deviceSerial =
+                                            item['veiculo']?['deviceSerial'];
                                         final plate = item['veiculo']?['plate'];
-                                        
+
                                         // Try finding by deviceSerial
                                         Map<String, dynamic> liveVehicle = {};
                                         if (deviceSerial != null) {
                                           liveVehicle = vehicles.firstWhere(
-                                            (v) => v['deviceSerial'] == deviceSerial,
+                                            (v) =>
+                                                v['deviceSerial'] ==
+                                                deviceSerial,
                                             orElse: () => <String, dynamic>{},
                                           );
                                         }
                                         // Fallback to plate
-                                        if (liveVehicle.isEmpty && plate != null) {
+                                        if (liveVehicle.isEmpty &&
+                                            plate != null) {
                                           liveVehicle = vehicles.firstWhere(
                                             (v) => v['plate'] == plate,
                                             orElse: () => <String, dynamic>{},
                                           );
                                         }
-                                        
-                                        if (liveVehicle.isEmpty || liveVehicle['status'] != 'connected') {
+
+                                        if (liveVehicle.isEmpty ||
+                                            liveVehicle['status'] !=
+                                                'connected') {
                                           hasOfflineVehicle = true;
                                           break;
                                         }
                                       }
-                                      
+
                                       if (hasOfflineVehicle) {
-                                        ScaffoldMessenger.of(context).clearSnackBars();
-                                        ScaffoldMessenger.of(context).showSnackBar(
+                                        ScaffoldMessenger.of(context)
+                                            .clearSnackBars();
+                                        ScaffoldMessenger.of(context)
+                                            .showSnackBar(
                                           const SnackBar(
-                                            content: Text('Este veículo parece offline. A câmera pode não carregar.'),
+                                            content: Text(
+                                                'Este veículo parece offline. A câmera pode não carregar.'),
                                             duration: Duration(seconds: 4),
-                                            backgroundColor: Colors.orangeAccent,
+                                            backgroundColor:
+                                                Colors.orangeAccent,
                                           ),
                                         );
                                       }
@@ -778,7 +763,9 @@ class _HomePageState extends ConsumerState<HomePage> with WindowListener {
                                         context: context,
                                         builder: (_) => AddMosaicoDialog(
                                           vehicles: vehicles,
-                                          onSave: ref.read(mosaicsProvider.notifier).loadMosaics,
+                                          onSave: ref
+                                              .read(mosaicsProvider.notifier)
+                                              .loadMosaics,
                                           mosaicToEdit: mosaicToEdit,
                                         ),
                                       );
@@ -787,8 +774,10 @@ class _HomePageState extends ConsumerState<HomePage> with WindowListener {
                             : (showVehicleDirectList
                                 ? VehicleChannelList(
                                     vehicles: vehicles,
-                                    onChannelToggle: (vehicle, channel, isSelected) {
-                                      _onChannelToggleDirect(vehicle, channel, isSelected);
+                                    onChannelToggle:
+                                        (vehicle, channel, isSelected) {
+                                      _onChannelToggleDirect(
+                                          vehicle, channel, isSelected);
                                     },
                                     selectedChannels: _selectedDirectChannels,
                                   )
@@ -805,7 +794,9 @@ class _HomePageState extends ConsumerState<HomePage> with WindowListener {
                                   context: context,
                                   builder: (_) => AddMosaicoDialog(
                                     vehicles: vehicles,
-                                    onSave: ref.read(mosaicsProvider.notifier).loadMosaics,
+                                    onSave: ref
+                                        .read(mosaicsProvider.notifier)
+                                        .loadMosaics,
                                   ),
                                 );
                               },
@@ -815,11 +806,13 @@ class _HomePageState extends ConsumerState<HomePage> with WindowListener {
                                 shape: RoundedRectangleBorder(
                                   borderRadius: BorderRadius.circular(8.0),
                                 ),
-                                padding: const EdgeInsets.symmetric(horizontal: 24.0, vertical: 12.0),
+                                padding: const EdgeInsets.symmetric(
+                                    horizontal: 24.0, vertical: 12.0),
                               ),
                               child: const Text(
                                 'Adicionar mosaico',
-                                style: TextStyle(color: Colors.white, fontSize: 16.0),
+                                style: TextStyle(
+                                    color: Colors.white, fontSize: 16.0),
                               ),
                             ),
                           ),
@@ -829,7 +822,9 @@ class _HomePageState extends ConsumerState<HomePage> with WindowListener {
                 ),
               ),
               Expanded(
-                child: _currentVideoOrder.isEmpty && !isLoadingGlobal && !videoStatuses.containsValue(VideoStreamStatus.loading)
+                child: _currentVideoOrder.isEmpty &&
+                        !isLoadingGlobal &&
+                        !videoStatuses.containsValue(VideoStreamStatus.loading)
                     ? Center(
                         child: SingleChildScrollView(
                           child: Column(
@@ -867,7 +862,8 @@ class _HomePageState extends ConsumerState<HomePage> with WindowListener {
                         crossAxisAlignment: CrossAxisAlignment.stretch,
                         children: [
                           Padding(
-                            padding: const EdgeInsets.symmetric(horizontal: 16.0, vertical: 8.0),
+                            padding: const EdgeInsets.symmetric(
+                                horizontal: 16.0, vertical: 8.0),
                             child: Row(
                               mainAxisAlignment: MainAxisAlignment.start,
                               crossAxisAlignment: CrossAxisAlignment.center,
@@ -885,13 +881,17 @@ class _HomePageState extends ConsumerState<HomePage> with WindowListener {
                                 const SizedBox(width: 24.0),
                                 TextButton.icon(
                                   onPressed: _clearAllVideos,
-                                  icon: const Icon(Icons.clear_all, color: Colors.redAccent, size: 18),
+                                  icon: const Icon(Icons.clear_all,
+                                      color: Colors.redAccent, size: 18),
                                   label: const Text(
                                     'Fechar todas',
-                                    style: TextStyle(color: Colors.redAccent, fontSize: 13.0),
+                                    style: TextStyle(
+                                        color: Colors.redAccent,
+                                        fontSize: 13.0),
                                   ),
                                   style: TextButton.styleFrom(
-                                    padding: const EdgeInsets.symmetric(horizontal: 8.0, vertical: 4.0),
+                                    padding: const EdgeInsets.symmetric(
+                                        horizontal: 8.0, vertical: 4.0),
                                   ),
                                 ),
                               ],
@@ -906,26 +906,7 @@ class _HomePageState extends ConsumerState<HomePage> with WindowListener {
                               videoErrors: videoErrors,
                               videoMetadata: _videoMetadata,
                               onRemove: _removeVideoFromGrid,
-                              onRetry: (url) {
-                                final metadata = _videoMetadata[url];
-                                if (metadata != null) {
-                                  final deviceSerial = metadata['deviceSerial'];
-                                  final canal = metadata['channel'];
-                                  final apiService = ref.read(apiServiceProvider);
-                                  final token = widget.token;
-                                  final vehicle = {
-                                    'deviceSerial': deviceSerial,
-                                    'plate': metadata['plate'],
-                                    'status': 'connected',
-                                  };
-                                  setState(() {
-                                    videoStatuses[url] = VideoStreamStatus.loading;
-                                    videoErrors.remove(url);
-                                    _retryCounts[url] = 0;
-                                  });
-                                  _loadSingleVideo(url, deviceSerial, canal, vehicle, apiService, token);
-                                }
-                              },
+                              onRetry: _retrySingleVideo,
                             ),
                           ),
                         ],

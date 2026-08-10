@@ -1,30 +1,31 @@
-// This is a basic Flutter widget test.
-//
-// To perform an interaction with a widget in your test, use the WidgetTester
-// utility in the flutter_test package. For example, you can send tap and scroll
-// gestures. You can also use WidgetTester to find child widgets in the widget
-// tree, read text, and verify that the values of widget properties are correct.
-
-import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
-
 import 'package:grupo_alessat_app/main.dart';
 
 void main() {
-  testWidgets('Counter increments smoke test', (WidgetTester tester) async {
-    // Build our app and trigger a frame.
+  testWidgets('exibe a trava temporaria na tela de login',
+      (WidgetTester tester) async {
     await tester.pumpWidget(const MyApp());
 
-    // Verify that our counter starts at 0.
-    expect(find.text('0'), findsOneWidget);
-    expect(find.text('1'), findsNothing);
+    expect(find.text('Usuário ou chave de acesso'), findsNothing);
+    expect(find.text('Senha'), findsNothing);
+    expect(find.text('Acesso temporariamente suspenso.'), findsOneWidget);
+    expect(find.text('Acesso temporariamente bloqueado'), findsOneWidget);
+    expect(
+      find.text(
+        'O acesso está temporariamente indisponível enquanto realizamos ajustes no servidor. Tente novamente mais tarde.',
+      ),
+      findsOneWidget,
+    );
 
-    // Tap the '+' icon and trigger a frame.
-    await tester.tap(find.byIcon(Icons.add));
+    await tester.tap(find.text('Acesso temporariamente bloqueado'));
     await tester.pump();
 
-    // Verify that our counter has incremented.
-    expect(find.text('0'), findsNothing);
-    expect(find.text('1'), findsOneWidget);
+    // A segunda ocorrencia vem do aviso; nenhuma chamada de login e iniciada.
+    expect(
+      find.text(
+        'O acesso está temporariamente indisponível enquanto realizamos ajustes no servidor. Tente novamente mais tarde.',
+      ),
+      findsNWidgets(2),
+    );
   });
 }

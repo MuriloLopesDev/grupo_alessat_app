@@ -3,5 +3,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:grupo_alessat_app/src/api/api_service.dart';
 
 final apiServiceProvider = Provider<ApiService>((ref) {
-  return ApiService();
+  final service = ApiService();
+  ref.onDispose(service.dispose);
+  return service;
 });

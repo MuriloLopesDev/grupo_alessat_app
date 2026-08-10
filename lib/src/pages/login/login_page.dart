@@ -4,6 +4,12 @@ import 'package:grupo_alessat_app/src/models/login_request.dart';
 import 'package:grupo_alessat_app/src/pages/home/home_page.dart';
 import 'package:window_manager/window_manager.dart';
 
+// Trava temporaria solicitada pelo cliente.
+// Para reativar o login, altere somente este valor para false.
+const bool _isLoginTemporarilyLocked = true;
+const String _temporaryLockMessage =
+    'O acesso está temporariamente indisponível enquanto realizamos ajustes no servidor. Tente novamente mais tarde.';
+
 class LoginPage extends StatefulWidget {
   const LoginPage({super.key});
 
@@ -15,7 +21,8 @@ class _LoginPageState extends State<LoginPage> {
   final _usernameController = TextEditingController();
   final _passwordController = TextEditingController();
   final _formKey = GlobalKey<FormState>();
-  bool _passwordVisible = false; // Estado para controlar a visibilidade da senha
+  bool _passwordVisible =
+      false; // Estado para controlar a visibilidade da senha
   bool _isLoading = false; // Estado para controlar o carregamento do login
   final ApiService _apiService = ApiService();
 
@@ -28,6 +35,9 @@ class _LoginPageState extends State<LoginPage> {
   @override
   void dispose() {
     _resetWindowBehavior();
+    _usernameController.dispose();
+    _passwordController.dispose();
+    _apiService.dispose();
     super.dispose();
   }
 
@@ -45,6 +55,11 @@ class _LoginPageState extends State<LoginPage> {
   }
 
   void _login() async {
+    if (_isLoginTemporarilyLocked) {
+      _showTemporaryLockMessage();
+      return;
+    }
+
     if (_formKey.currentState!.validate()) {
       setState(() {
         _isLoading = true;
@@ -65,16 +80,17 @@ class _LoginPageState extends State<LoginPage> {
           if (!mounted) return;
           Navigator.pushReplacement(
             context,
-            MaterialPageRoute(builder: (context) => HomePage(token: response.token)),
+            MaterialPageRoute(
+                builder: (context) => HomePage(token: response.token)),
           );
         } else {
           final lowerMsg = response.message.toLowerCase();
-          final friendlyMessage = (lowerMsg.contains('invalido') || 
-                                   lowerMsg.contains('inválido') || 
-                                   lowerMsg.contains('credential') || 
-                                   lowerMsg.contains('incorrect') || 
-                                   lowerMsg.contains('senha') || 
-                                   lowerMsg.contains('usuário'))
+          final friendlyMessage = (lowerMsg.contains('invalido') ||
+                  lowerMsg.contains('inválido') ||
+                  lowerMsg.contains('credential') ||
+                  lowerMsg.contains('incorrect') ||
+                  lowerMsg.contains('senha') ||
+                  lowerMsg.contains('usuário'))
               ? 'Usuário, chave de acesso ou senha inválidos.'
               : response.message;
 
@@ -89,7 +105,8 @@ class _LoginPageState extends State<LoginPage> {
         if (mounted) {
           ScaffoldMessenger.of(context).showSnackBar(
             const SnackBar(
-              content: Text('Erro ao tentar conectar ao servidor. Verifique sua conexão.'),
+              content: Text(
+                  'Erro ao tentar conectar ao servidor. Verifique sua conexão.'),
               backgroundColor: Colors.redAccent,
             ),
           );
@@ -102,6 +119,15 @@ class _LoginPageState extends State<LoginPage> {
         }
       }
     }
+  }
+
+  void _showTemporaryLockMessage() {
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(
+        content: Text(_temporaryLockMessage),
+        backgroundColor: Colors.orange,
+      ),
+    );
   }
 
   void _showRecoverPasswordDialog() {
@@ -210,7 +236,8 @@ class _LoginPageState extends State<LoginPage> {
                 ),
               ),
               child: Padding(
-                padding: const EdgeInsets.symmetric(horizontal: 32.0, vertical: 40.0),
+                padding: const EdgeInsets.symmetric(
+                    horizontal: 32.0, vertical: 40.0),
                 child: Form(
                   key: _formKey,
                   child: Column(
@@ -234,79 +261,120 @@ class _LoginPageState extends State<LoginPage> {
                       ),
                       const SizedBox(height: 8.0),
                       Text(
-                        'Entre para visualizar seus mosaicos e câmeras.',
+                        _isLoginTemporarilyLocked
+                            ? 'Acesso temporariamente suspenso.'
+                            : 'Entre para visualizar seus mosaicos e câmeras.',
                         textAlign: TextAlign.center,
                         style: TextStyle(
                           color: Colors.white.withOpacity(0.7),
                           fontSize: 14.0,
                         ),
                       ),
-                      const SizedBox(height: 32.0),
-                      TextFormField(
-                        controller: _usernameController,
-                        decoration: InputDecoration(
-                          labelText: 'Usuário ou chave de acesso',
-                          labelStyle: const TextStyle(color: Colors.white70),
-                          border: OutlineInputBorder(
+                      if (_isLoginTemporarilyLocked) ...[
+                        const SizedBox(height: 20.0),
+                        Container(
+                          padding: const EdgeInsets.all(14.0),
+                          decoration: BoxDecoration(
+                            color: Colors.orange.withOpacity(0.12),
                             borderRadius: BorderRadius.circular(8.0),
+                            border: Border.all(color: Colors.orange),
                           ),
-                          enabledBorder: OutlineInputBorder(
-                            borderRadius: BorderRadius.circular(8.0),
-                            borderSide: const BorderSide(color: Colors.grey),
+                          child: const Row(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Icon(Icons.info_outline, color: Colors.orange),
+                              SizedBox(width: 10.0),
+                              Expanded(
+                                child: Text(
+                                  _temporaryLockMessage,
+                                  style: TextStyle(
+                                    color: Colors.white,
+                                    height: 1.35,
+                                  ),
+                                ),
+                              ),
+                            ],
                           ),
-                          focusedBorder: OutlineInputBorder(
-                            borderRadius: BorderRadius.circular(8.0),
-                            borderSide: const BorderSide(color: Color(0xFF0794bc), width: 1.5),
-                          ),
-                          contentPadding: const EdgeInsets.symmetric(horizontal: 16.0, vertical: 16.0),
                         ),
-                        style: const TextStyle(color: Colors.white),
-                        validator: (value) {
-                          if (value == null || value.trim().isEmpty) {
-                            return 'Campo obrigatório';
-                          }
-                          return null;
-                        },
-                      ),
-                      const SizedBox(height: 20.0),
-                      TextFormField(
-                        controller: _passwordController,
-                        decoration: InputDecoration(
-                          labelText: 'Senha',
-                          labelStyle: const TextStyle(color: Colors.white70),
-                          border: OutlineInputBorder(
-                            borderRadius: BorderRadius.circular(8.0),
-                          ),
-                          enabledBorder: OutlineInputBorder(
-                            borderRadius: BorderRadius.circular(8.0),
-                            borderSide: const BorderSide(color: Colors.grey),
-                          ),
-                          focusedBorder: OutlineInputBorder(
-                            borderRadius: BorderRadius.circular(8.0),
-                            borderSide: const BorderSide(color: Color(0xFF0794bc), width: 1.5),
-                          ),
-                          contentPadding: const EdgeInsets.symmetric(horizontal: 16.0, vertical: 16.0),
-                          suffixIcon: IconButton(
-                            icon: Icon(
-                              _passwordVisible ? Icons.visibility : Icons.visibility_off,
-                              color: Colors.grey,
+                      ],
+                      if (!_isLoginTemporarilyLocked) ...[
+                        const SizedBox(height: 32.0),
+                        TextFormField(
+                          controller: _usernameController,
+                          enabled: !_isLoginTemporarilyLocked,
+                          decoration: InputDecoration(
+                            labelText: 'Usuário ou chave de acesso',
+                            labelStyle: const TextStyle(color: Colors.white70),
+                            border: OutlineInputBorder(
+                              borderRadius: BorderRadius.circular(8.0),
                             ),
-                            onPressed: () {
-                              setState(() {
-                                _passwordVisible = !_passwordVisible;
-                              });
-                            },
+                            enabledBorder: OutlineInputBorder(
+                              borderRadius: BorderRadius.circular(8.0),
+                              borderSide: const BorderSide(color: Colors.grey),
+                            ),
+                            focusedBorder: OutlineInputBorder(
+                              borderRadius: BorderRadius.circular(8.0),
+                              borderSide: const BorderSide(
+                                  color: Color(0xFF0794bc), width: 1.5),
+                            ),
+                            contentPadding: const EdgeInsets.symmetric(
+                                horizontal: 16.0, vertical: 16.0),
                           ),
+                          style: const TextStyle(color: Colors.white),
+                          validator: (value) {
+                            if (value == null || value.trim().isEmpty) {
+                              return 'Campo obrigatório';
+                            }
+                            return null;
+                          },
                         ),
-                        obscureText: !_passwordVisible,
-                        style: const TextStyle(color: Colors.white),
-                        validator: (value) {
-                          if (value == null || value.trim().isEmpty) {
-                            return 'Campo obrigatório';
-                          }
-                          return null;
-                        },
-                      ),
+                        const SizedBox(height: 20.0),
+                        TextFormField(
+                          controller: _passwordController,
+                          enabled: !_isLoginTemporarilyLocked,
+                          decoration: InputDecoration(
+                            labelText: 'Senha',
+                            labelStyle: const TextStyle(color: Colors.white70),
+                            border: OutlineInputBorder(
+                              borderRadius: BorderRadius.circular(8.0),
+                            ),
+                            enabledBorder: OutlineInputBorder(
+                              borderRadius: BorderRadius.circular(8.0),
+                              borderSide: const BorderSide(color: Colors.grey),
+                            ),
+                            focusedBorder: OutlineInputBorder(
+                              borderRadius: BorderRadius.circular(8.0),
+                              borderSide: const BorderSide(
+                                  color: Color(0xFF0794bc), width: 1.5),
+                            ),
+                            contentPadding: const EdgeInsets.symmetric(
+                                horizontal: 16.0, vertical: 16.0),
+                            suffixIcon: IconButton(
+                              icon: Icon(
+                                _passwordVisible
+                                    ? Icons.visibility
+                                    : Icons.visibility_off,
+                                color: Colors.grey,
+                              ),
+                              onPressed: _isLoginTemporarilyLocked
+                                  ? null
+                                  : () {
+                                      setState(() {
+                                        _passwordVisible = !_passwordVisible;
+                                      });
+                                    },
+                            ),
+                          ),
+                          obscureText: !_passwordVisible,
+                          style: const TextStyle(color: Colors.white),
+                          validator: (value) {
+                            if (value == null || value.trim().isEmpty) {
+                              return 'Campo obrigatório';
+                            }
+                            return null;
+                          },
+                        ),
+                      ],
                       const SizedBox(height: 32.0),
                       SizedBox(
                         height: 48.0,
@@ -342,7 +410,9 @@ class _LoginPageState extends State<LoginPage> {
                                   ],
                                 )
                               : const Text(
-                                  'Entrar',
+                                  _isLoginTemporarilyLocked
+                                      ? 'Acesso temporariamente bloqueado'
+                                      : 'Entrar',
                                   style: TextStyle(
                                     fontSize: 16.0,
                                     fontWeight: FontWeight.bold,
