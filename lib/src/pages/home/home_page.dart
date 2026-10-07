@@ -3,6 +3,7 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:grupo_alessat_app/src/api/api_service.dart';
+import 'package:grupo_alessat_app/src/models/available_channels.dart';
 import 'package:grupo_alessat_app/src/pages/home/components/add_mosaico_dialog.dart';
 import 'package:grupo_alessat_app/src/pages/home/components/full_screen_video.dart';
 import 'package:grupo_alessat_app/src/pages/home/components/mosaic_list.dart';
@@ -231,6 +232,12 @@ class _HomePageState extends ConsumerState<HomePage> with WindowListener {
     final String token = widget.token;
     final Map<String, Map<String, dynamic>> uniqueItems = {};
     final Map<String, Map<String, dynamic>> tempNewVideoMetadata = {};
+    final availableBySerial = {
+      for (final vehicle in ref.read(vehiclesProvider))
+        if (vehicle['deviceSerial'] != null)
+          vehicle['deviceSerial'].toString():
+              availableChannelsForVehicle(vehicle).toSet(),
+    };
 
     for (final item in newItems) {
       final vehicle = item['veiculo'];
@@ -240,6 +247,7 @@ class _HomePageState extends ConsumerState<HomePage> with WindowListener {
       final canal = item['canal'] is int
           ? item['canal'] as int
           : int.tryParse(item['canal'].toString()) ?? 1;
+      if (!(availableBySerial[deviceSerial]?.contains(canal) ?? false)) continue;
       final url =
           'https://moovsec.alessat.com.br:3010/live/${deviceSerial}_$canal';
       uniqueItems.putIfAbsent(url, () => item);

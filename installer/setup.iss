@@ -1,5 +1,5 @@
 #define MyAppName "Grupo Alessat App"
-#define MyAppVersion "2.0.2"
+#define MyAppVersion "2.0.3"
 #define MyAppPublisher "Grupo Alessat"
 #define MyAppExeName "grupo_alessat_app.exe"
 

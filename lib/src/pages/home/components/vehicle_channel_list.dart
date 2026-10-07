@@ -1,5 +1,6 @@
 // lib/src/pages/home/components/vehicle_channel_list.dart
 import 'package:flutter/material.dart';
+import 'package:grupo_alessat_app/src/models/available_channels.dart';
 
 class VehicleChannelList extends StatefulWidget {
   final List<Map<String, dynamic>> vehicles;
@@ -140,6 +141,9 @@ class _VehicleChannelListState extends State<VehicleChannelList> {
                     final vehicle = filteredVehicles[index];
                     final id = vehicle['deviceSerial'];
                     final selected = widget.selectedChannels[id] ?? [];
+                    final channels = availableChannelsForVehicle(vehicle);
+                    final allSelected = channels.isNotEmpty &&
+                        channels.every(selected.contains);
 
                     final isOnline = vehicle['status'] == 'connected';
                     return ExpansionTile(
@@ -194,16 +198,16 @@ class _VehicleChannelListState extends State<VehicleChannelList> {
                           title: Text(
                             'Todos os Canais',
                             style: TextStyle(
-                              color: selected.length == 6 ? const Color(0xFF0794bc) : Colors.white,
+                              color: allSelected ? const Color(0xFF0794bc) : Colors.white,
                               fontWeight: FontWeight.bold,
                             ),
                           ),
-                          value: selected.length == 6, // Assumindo 6 canais
-                          selected: selected.length == 6,
+                          value: allSelected,
+                          selected: allSelected,
                           selectedTileColor: Colors.white.withOpacity(0.06),
-                          onChanged: (bool? val) {
-                            for (int i = 1; i <= 6; i++) {
-                              widget.onChannelToggle(vehicle, i, val ?? false);
+                          onChanged: channels.isEmpty ? null : (bool? val) {
+                            for (final channel in channels) {
+                              widget.onChannelToggle(vehicle, channel, val ?? false);
                             }
                             if (val == true && vehicle['status'] != 'connected') {
                               _showOfflineWarning(context);
@@ -213,8 +217,12 @@ class _VehicleChannelListState extends State<VehicleChannelList> {
                           activeColor: const Color(0xFF0794bc),
                         ),
                         // ------------------------
-                        ...List.generate(6, (i) {
-                          final channel = i + 1;
+                        if (channels.isEmpty)
+                          const ListTile(
+                            title: Text('Nenhum canal informado para este veículo',
+                                style: TextStyle(color: Colors.white70)),
+                          ),
+                        ...channels.map((channel) {
                           final isChannelSelected = selected.contains(channel);
                           return CheckboxListTile(
                             title: Text(

@@ -1,5 +1,6 @@
 // src/pages/home/components/mosaic_list.dart
 import 'package:flutter/material.dart';
+import 'package:grupo_alessat_app/src/models/available_channels.dart';
 
 class MosaicList extends StatefulWidget {
   final List<Map<String, dynamic>> mosaics;
@@ -128,7 +129,15 @@ class _MosaicListState extends State<MosaicList> {
                             });
                           },
                           children: [
-                            ...(frota['itens'] as List).map<Widget>((item) {
+                            ...(frota['itens'] as List).where((item) {
+                              final serial = item['veiculo']?['deviceSerial'];
+                              final liveVehicle = widget.vehicles.firstWhere(
+                                (vehicle) => vehicle['deviceSerial'] == serial,
+                                orElse: () => <String, dynamic>{},
+                              );
+                              return availableChannelsForVehicle(liveVehicle)
+                                  .contains(item['canal']);
+                            }).map<Widget>((item) {
                               final veiculo = item['veiculo'];
                               final canal = item['canal'];
                               final status = _getLiveStatus(veiculo);

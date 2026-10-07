@@ -2,6 +2,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart'; // Importar Riverpod
 import 'package:grupo_alessat_app/src/pages/home/components/add_frota_dialog.dart';
+import 'package:grupo_alessat_app/src/models/available_channels.dart';
 import 'package:grupo_alessat_app/src/providers/mosaics_provider.dart'; // Importar provedor
 
 class AddMosaicoDialog extends ConsumerStatefulWidget {
@@ -45,6 +46,11 @@ class _AddMosaicoDialogState extends ConsumerState<AddMosaicoDialog> {
         for (var item in (frota['itens'] as List)) {
           final String deviceSerial = item['veiculo']['deviceSerial'];
           final int canal = item['canal'];
+          final vehicle = widget.vehicles.firstWhere(
+            (v) => v['deviceSerial'] == deviceSerial,
+            orElse: () => <String, dynamic>{},
+          );
+          if (!availableChannelsForVehicle(vehicle).contains(canal)) continue;
 
           if (!groupedVehicles.containsKey(deviceSerial)) {
             groupedVehicles[deviceSerial] = {
@@ -114,7 +120,13 @@ class _AddMosaicoDialogState extends ConsumerState<AddMosaicoDialog> {
         for (var veiculo in frota['vehicles']) {
           final plate = veiculo['plate'];
           final deviceSerial = veiculo['deviceSerial'];
-          final canais = veiculo['canais'] ?? [];
+          final vehicle = widget.vehicles.firstWhere(
+            (v) => v['deviceSerial'] == deviceSerial,
+            orElse: () => <String, dynamic>{},
+          );
+          final available = availableChannelsForVehicle(vehicle);
+          final canais = (veiculo['canais'] as List? ?? [])
+              .where(available.contains);
           final status = veiculo['status'];
 
           for (var canal in canais) {

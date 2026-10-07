@@ -1,5 +1,6 @@
 // lib/src/pages/home/components/add_frota_dialog.dart
 import 'package:flutter/material.dart';
+import 'package:grupo_alessat_app/src/models/available_channels.dart';
 
 class AddFrotaDialog extends StatefulWidget {
   final List<Map<String, dynamic>> vehicles;
@@ -28,8 +29,14 @@ class _AddFrotaDialogState extends State<AddFrotaDialog> {
       final List<dynamic> vehiclesInFrota = widget.frotaToEdit!['vehicles'] ?? [];
       for (var v in vehiclesInFrota) {
         final deviceSerial = v['deviceSerial'];
+        final vehicle = widget.vehicles.firstWhere(
+          (item) => item['deviceSerial'] == deviceSerial,
+          orElse: () => <String, dynamic>{},
+        );
+        final available = availableChannelsForVehicle(vehicle);
         final canais = List<int>.from(v['canais'] ?? []);
-        vehicleChannels[deviceSerial] = canais;
+        vehicleChannels[deviceSerial] =
+            canais.where(available.contains).toList();
       }
     }
   }
@@ -81,7 +88,9 @@ class _AddFrotaDialogState extends State<AddFrotaDialog> {
       // ========================================================
       return {
         'plate': v['plate'],
-        'canais': vehicleChannels[deviceSerial] ?? [],
+        'canais': (vehicleChannels[deviceSerial] ?? [])
+            .where(availableChannelsForVehicle(v).contains)
+            .toList(),
         'deviceSerial': deviceSerial,
         'status': v['status'],
       };
@@ -167,6 +176,9 @@ class _AddFrotaDialogState extends State<AddFrotaDialog> {
                     final id = v['deviceSerial'];
                     // ========================================================
                     final selected = vehicleChannels[id] ?? [];
+                    final channels = availableChannelsForVehicle(v);
+                    final allSelected = channels.isNotEmpty &&
+                        channels.every(selected.contains);
 
                     return ExpansionTile(
                       title: Row(
@@ -179,21 +191,25 @@ class _AddFrotaDialogState extends State<AddFrotaDialog> {
                       children: [
                         CheckboxListTile(
                           title: const Text('Todos', style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
-                          value: selected.length == 6,
-                          onChanged: (val) {
+                          value: allSelected,
+                          onChanged: channels.isEmpty ? null : (val) {
                             if (val == true) {
-                              for (int i = 1; i <= 6; i++) {
-                                toggleChannel(id, i, true);
+                              for (final channel in channels) {
+                                toggleChannel(id, channel, true);
                               }
                             } else {
-                              for (int i = 1; i <= 6; i++) {
-                                toggleChannel(id, i, false);
+                              for (final channel in channels) {
+                                toggleChannel(id, channel, false);
                               }
                             }
                           },
                         ),
-                        ...List.generate(6, (i) {
-                          final ch = i + 1;
+                        if (channels.isEmpty)
+                          const ListTile(
+                            title: Text('Nenhum canal informado para este veículo',
+                                style: TextStyle(color: Colors.white70)),
+                          ),
+                        ...channels.map((ch) {
                           return CheckboxListTile(
                             title: Text('Canal $ch', style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
                             value: selected.contains(ch),

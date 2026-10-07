@@ -6,7 +6,7 @@ import 'package:window_manager/window_manager.dart';
 
 // Trava temporaria solicitada pelo cliente.
 // Para reativar o login, altere somente este valor para false.
-const bool _isLoginTemporarilyLocked = true;
+const bool _isLoginTemporarilyLocked = false;
 const String _temporaryLockMessage =
     'O acesso está temporariamente indisponível enquanto realizamos ajustes no servidor. Tente novamente mais tarde.';
 

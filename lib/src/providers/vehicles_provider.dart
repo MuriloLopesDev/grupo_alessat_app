@@ -4,6 +4,7 @@ import 'package:grupo_alessat_app/src/api/api_service.dart';
 import 'package:grupo_alessat_app/src/providers/api_service_provider.dart';
 import 'package:grupo_alessat_app/src/providers/cache_service_provider.dart';
 import 'package:grupo_alessat_app/src/services/cache_service.dart';
+import 'package:grupo_alessat_app/src/models/available_channels.dart';
 
 final vehiclesProvider = StateNotifierProvider<VehiclesNotifier, List<Map<String, dynamic>>>((ref) {
   return VehiclesNotifier(ref.read(apiServiceProvider), ref.read(cacheServiceProvider));
@@ -38,16 +39,20 @@ class VehiclesNotifier extends StateNotifier<List<Map<String, dynamic>>> {
               // Certifica que 'dataFleet' é uma lista
               for (int j = 0; j < dataFleet.length; j++) {
                 String? deviceSerialValue;
-                if (dataFleet[j] != null && // dataFleet[j] não nulo
-                    dataFleet[j]['deviceList'] != null && // deviceList não nulo
-                    dataFleet[j]['deviceList'] is List && // deviceList é uma lista
-                    dataFleet[j]['deviceList'].isNotEmpty) {
-                  // lista não vazia
-
-                  // Tenta acessar o primeiro elemento da lista e depois a chave 'deviceSerial'
-                  // Adicionado verificação para garantir que o elemento da lista é um Map
-                  if (dataFleet[j]['deviceList'][0] is Map<String, dynamic>) {
-                    deviceSerialValue = dataFleet[j]['deviceList'][0]['deviceSerial']?.toString();
+                List<int> channels = const [];
+                final deviceList = dataFleet[j]?['deviceList'];
+                if (deviceList is List) {
+                  for (final entry in deviceList) {
+                    if (entry is! Map) continue;
+                    final serial = entry['deviceSerial']?.toString();
+                    if (serial == null || serial.isEmpty) continue;
+                    deviceSerialValue ??= serial;
+                    final available = availableChannelsFromDevice(entry);
+                    if (available.isNotEmpty) {
+                      deviceSerialValue = serial;
+                      channels = available;
+                      break;
+                    }
                   }
                 }
 
@@ -55,6 +60,7 @@ class VehiclesNotifier extends StateNotifier<List<Map<String, dynamic>>> {
                   'plate': dataFleet[j]?['plate']?.toString() ?? 'N/A', // Acesso seguro e fallback
                   'status': dataFleet[j]?['lastConnectionStatus']?['status']?.toString() ?? 'disconnected', // Acesso seguro e fallback
                   'deviceSerial': deviceSerialValue,
+                  'channels': channels,
                 });
               }
             }
